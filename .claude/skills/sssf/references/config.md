@@ -213,6 +213,67 @@ This fails quietly. The extension still loads, the run still succeeds, and the t
 
 Rule: **every entry in `harness_engineering` that registers a tool must have that tool name added to the agent's `tools` list.** Adding an extension is therefore a two-line change, never one. The alternative is dropping the `tools` key *and* leaving `defaults.tools` unset so the agent resolves to `None` (all tools) — but with a roster-wide `defaults.tools` in place, that escape hatch is closed; naming the tool is the only path.
 
+## `doc_policy` — the documentation contract
+
+`doc_policy` is a top-level key in `sssf.config.yaml` (a sibling of `defaults`,
+`observability`, and `agents`), optional and **empty by default** — the
+`doc_policy` gate never fires until you write a rule.
+
+```yaml
+doc_policy:
+  - when: "apps/api/**/Auth*.cs"
+    require: ["docs/AUTH.md"]
+  - when: "apps/web/src/**"
+    require: ["docs/ARCHITECTURE.md", "docs/FEATURES.md"]
+```
+
+A rule fires when a changed file matches `when`; it then requires each
+`require` entry to also appear among the changed files. Both sides are path
+globs with the same semantics as `writes:` — `*` stops at a directory
+separator, `**` crosses them (and `**/` also matches zero directories, so
+`**/*.md` covers `README.md` at the repo root), a trailing `/` is a directory
+prefix.
+
+The gate is silent when no rule triggers — it reports a check only per rule
+that actually fired, so one real violation is never buried under a hundred
+green lines. It judges the envelope's **claimed** `changed_files`, like every
+gate does; `permissions.enforce` is what checks the real diff, and it runs
+after the gates and only bounds what an agent may write, not what it admitted
+to. A violation returns to the same agent session, context intact, so the
+correction is "also update this document," not a fresh run.
+
+## Quality blocks — `quality_blocks.py`
+
+`adw_modules/quality.py` is the engine; the commands it runs live in
+`adws/adw_modules/quality_blocks.py`, a generated list of `QualityCheckSpec`.
+`install.py --profile <name>` writes that file from what it finds in the repo.
+Without a matching profile, `quality.py` falls back to `PLACEHOLDER_BLOCKS` —
+every block is an `echo` that exits 0 and names itself as fake, on purpose: a
+wrong-but-plausible command that silently passes is worse than one that admits
+it.
+
+```python
+QualityCheckSpec(
+    name="check-web", area="frontend", operation="typecheck",
+    argv=["npm", "run", "check"],
+    cwd="apps/web", tier="fast", timeout_seconds=600,
+)
+```
+
+- `tier` is `"fast"` or `"full"`. `quality.run_tests()` (the bounded fix loop)
+  runs only `fast`; `quality.run_quality()` (final verification, run once) runs
+  both. A Testcontainers suite needs Docker up, so paying for it on every retry
+  is a real cost, not a theoretical one — put it in `full`.
+- Selecting a tier with **no blocks in it raises**, rather than reporting a
+  green result from zero executed commands. That is reachable two ways — an
+  empty `BLOCKS`, or a block list where every entry is `full` so the fast tier
+  selects nothing — and neither is something a builder can repair, so neither
+  is allowed to look like a pass.
+- `cwd` is repo-relative. A monorepo runs the same command in several
+  packages; this is how, without a per-package-manager flag table.
+- `argv` is a list, never a shell string, and binaries are called by bare name
+  so they resolve through the operator's own PATH.
+
 ## Harness engineering
 
 `harness_engineering` entries are pi extension **file paths**, passed through as `pi -e <path>`, one flag per entry, scoped to that agent only. This is where per-agent harness changes live — e.g. an output-tightening extension for an agent that keeps wrapping its envelope in prose. The starter roster ships with none.

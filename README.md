@@ -365,7 +365,7 @@ Honest edges, because knowing them is cheaper than discovering them.
 
 | Failure | What actually happens | What to do |
 |---|---|---|
-| The test phase reports green on a fresh install | `quality.py` ships placeholder commands that exit 0. Three ADWs run them as their test phase | Wire your real commands into `quality.py` before trusting `adw_build_test`, `adw_plan_build_test`, or `adw_simple_sdlc`. This is the first thing to customize |
+| The test phase reports green on a fresh install | Only without a matching profile. `install.py` probes the repo and generates `adws/adw_modules/quality_blocks.py` with its real commands; with no profile match, those blocks stay `quality.py`'s `echo` placeholders that exit 0 | Run `install.py --doctor` to see what was wired. If no profile matched, write the specs into `quality_blocks.py` by hand before trusting `adw_build_test`, `adw_plan_build_test`, or `adw_simple_sdlc` |
 | A bare model pattern | On `pi`, the same model sits under several providers, so `gemini-3.6-flash` matches three catalog entries and `agents.validate()` refuses to spawn. On `claude_code` a bare pattern fails the same validation for a simpler reason — there is no catalog, so anything without a `/` is rejected outright | Always write `provider/model-id` |
 | `just` is not installed | The stamped `justfile` is a convenience wrapper, nothing depends on it | Every recipe is a one-line `uv run` command. Open the justfile and run the line yourself |
 | A coding agent hangs silently | No events, no tokens, an empty `raw_output.jsonl`. The trace goes quiet rather than red | Query `processes` for what is alive and kill it children-first. A killed run finalizes its own trace to `fail` |
@@ -392,7 +392,7 @@ Where to start, roughly in the order that pays off fastest:
 
 | Change | File | Why |
 |---|---|---|
-| Your real commands | `adws/adw_modules/quality.py` | The shipped blocks are placeholders that exit 0. Until you wire this, your test phase is theater |
+| Your real commands | `adws/adw_modules/quality_blocks.py` | Generated from a stack profile at install time (`install.py --profile <name>`). Plain Python: open it and correct anything the probe got wrong. No matching profile means `quality.py` falls back to `echo` placeholders, and your test phase is theater until you fix that |
 | Your prompts | `adws/adw_data/prompt_engineering/{agent}/` | Where your standards live: what a good plan looks like, what a review has to catch |
 | Your roster | `adws/adw_sssf_config/sssf.config.yaml` | Models, thinking levels, tools, and what each agent is allowed to write |
 | Your chains | `adws/adw_*.py` | Copy the closest workflow and edit the phase list. They are 40 to 180 lines on purpose |

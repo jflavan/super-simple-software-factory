@@ -71,6 +71,26 @@ Deep specs, when needed: [references/config.md](references/config.md) · [refere
 9. **`tools:` is a capability list, `writes:` is the boundary** — `bash` runs anything (including `git checkout`) and `write` reaches any path, so a tool list can never make "this agent changes nothing" true. `writes:` per agent and `protected_files` in defaults are enforced in `adw_modules/permissions.py` after every agent call: unauthorized changes are rolled back and the phase dies. The session runtime under `data_dir` is always writable — a read-only agent is read-only with respect to the REPO, never mute.
 10. **Every ADW ends in `run.finish()`** — phases passing is not the same as the run being accepted. A test phase that ran a red suite succeeded at its job. Pass `accepted=` so the exit code, the session status, and the banner are decided together and cannot disagree.
 
+## Stack profiles
+
+`install.py` probes the repo and, when a **profile** matches, generates its
+quality blocks, gate wiring, and a prompt overlay from what it finds — so a
+fresh install runs the repo's real commands instead of `quality.py`'s `echo`
+placeholders. `--profile <name>` picks one by name, `--no-profile` skips the
+step entirely, `--doctor` re-probes and reports without writing anything.
+
+A **framework** module owns one technology — its detection, its quality
+commands, its gates, its prompt guidance; a **profile** is a short YAML file
+naming the frameworks a stack is made of. Adding a stack is one YAML file;
+adding a technology is one framework module exposing eight names. Neither
+touches a core module. See [cookbooks/install.md](cookbooks/install.md) →
+"Adding a framework".
+
+A framework may only encode **stack** facts (EF Core writes three files per
+migration), **discovered** facts (where the solution is), and **configured**
+facts (`doc_policy` in the roster) — never a path or fact true of only one
+repository.
+
 ## Coding-agent backends
 
 Two backends. `coding_agent: pi` (default) runs the Pi agent; `coding_agent: claude_code`
