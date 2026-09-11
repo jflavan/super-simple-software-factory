@@ -32,6 +32,29 @@ from pathlib import Path
 DEFAULT_DB = "adws/adw_data/sssf.db"
 
 
+def _make_stdout_unable_to_kill_a_report() -> None:
+    """Deliberately a copy of `console.make_stdout_unable_to_kill_a_run`.
+
+    Everything this prints is agent-authored free text - a phase description, a
+    gate violation, an error - and agents write arrow and check glyphs
+    constantly. Redirected to a cp1252 stream (a pipe, a CI log, `> file`) an
+    unencodable one raised UnicodeEncodeError and took the whole report down,
+    which is the worst possible moment: this is the tool an operator reaches
+    for AFTER something has already gone wrong.
+
+    Not imported from adw_modules because this file declares
+    `dependencies = []` and means it - it is the one tool that has to work on a
+    machine where nothing else does, including one with no sqlite3 CLI and no
+    third-party packages installed. `adw_modules.utils` pulls in dotenv. Four
+    duplicated lines are the cheaper of the two prices, and a test pins the two
+    copies to the same behaviour.
+    """
+    try:
+        sys.stdout.reconfigure(errors="replace")
+    except (AttributeError, ValueError, OSError):
+        pass
+
+
 class TraceUnreadable(RuntimeError):
     """The file is there but cannot be read as a trace."""
 
@@ -89,6 +112,7 @@ def _print(rows: list[sqlite3.Row], limit: int) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    _make_stdout_unable_to_kill_a_report()
     # --db lives on a shared parent so it works after the subcommand (as every
     # caller here writes it, e.g. "sessions --db path") — argparse hands
     # anything after the subcommand token to that subparser, not the root one.

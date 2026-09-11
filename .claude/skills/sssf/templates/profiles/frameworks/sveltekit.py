@@ -77,7 +77,7 @@ def _csp_file(root: Path, frontend: Frontend) -> str:
         path = root / frontend.directory / candidate
         if not path.is_file():
             continue
-        text = path.read_text(errors="replace").lower()
+        text = path.read_text(encoding="utf-8", errors="replace").lower()
         if any(m in text for m in CSP_MARKERS):
             return probes.relative(root, path)
     return ""

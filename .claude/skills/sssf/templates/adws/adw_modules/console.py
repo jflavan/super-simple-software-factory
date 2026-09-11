@@ -8,6 +8,8 @@ so a CI log reads exactly like a terminal.
 
 from __future__ import annotations
 
+import sys
+
 from rich.console import Console as RichConsole
 from rich.markup import escape
 from rich.panel import Panel
@@ -17,6 +19,42 @@ from .data_types import EnvelopeBase, EventRecord, Phase
 
 KIND_COLOR = {"engineer": "cyan", "agent": "magenta", "code": "yellow"}
 MAX_LINE = 160          # dynamic text (summaries, violations, errors) is clipped
+
+def make_stdout_unable_to_kill_a_run() -> None:
+    """Stop an unencodable glyph from taking the whole run down with it.
+
+    The banner prints `▶`, `─` and `│`. When stdout resolves to a cp1252
+    stream, `rich` raised `UnicodeEncodeError` MID-PHASE: the process died
+    before anything could finalize, and that session's row stayed `running` in
+    the trace forever. In practice that means REDIRECTED output — a pipe, a CI
+    log, `> file` — because since PEP 528 a real Windows console is UTF-8
+    whatever the code page says; a console forced back to a code page by
+    PYTHONIOENCODING or legacy mode hits it too.
+
+    Only the error handler changes, and only on stdout.
+
+    - Not the encoding: writing UTF-8 bytes at a cp1252 stream would trade one
+      crash for mojibake on every line, where this touches only the characters
+      that could not have been rendered anyway.
+    - Not stderr: CPython already defaults it to `backslashreplace`, which
+      cannot raise. Setting `replace` there would REPLACE a lossless handler
+      with a lossy one for every traceback in the process — strictly worse.
+
+    Not cached. There is one Console per run, `reconfigure(errors=...)` is
+    cheap and idempotent, and an earlier attempt against some other stdout (a
+    StringIO under a test harness) must not stop the real one being protected
+    later. `rich` resolves `sys.stdout` lazily on every write, so the stream
+    that matters is the one live at write time, not at construction.
+
+    The trace is unaffected either way. It is UTF-8 in SQLite, so the swim-lane
+    UI shows the real glyphs no matter what the terminal could render.
+    """
+    try:
+        sys.stdout.reconfigure(errors="replace")
+    except (AttributeError, ValueError, OSError):
+        # Redirected to something without reconfigure(), or already detached.
+        # Nothing here is worth failing a run over.
+        pass
 
 
 def _clip(text: str, limit: int = MAX_LINE) -> str:
@@ -34,6 +72,7 @@ class Console:
         self.phase_name = ""
         self.results: list[str] = []            # phase statuses, for the summary
         self._finished = False                  # the summary panel prints once
+        make_stdout_unable_to_kill_a_run()
         self._out = RichConsole(highlight=False, soft_wrap=True)
 
     # ── the one helper: print AND trace, always together ────────────────────

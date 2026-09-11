@@ -7,7 +7,12 @@ from pathlib import Path
 
 
 def _git(*args: str) -> str:
-    result = subprocess.run(["git", *args], capture_output=True, text=True)
+    # quotePath=false so a non-ASCII path is reported as itself rather than
+    # C-quoted, surrogateescape so an undecodable byte round-trips instead of
+    # collapsing to U+FFFD. See permissions.GIT_PREFIX for why this matters.
+    result = subprocess.run(["git", "-c", "core.quotePath=false", *args],
+                            capture_output=True, text=True,
+                            encoding="utf-8", errors="surrogateescape")
     if result.returncode != 0:
         raise RuntimeError(f"git {' '.join(args)} failed: {result.stderr.strip()}")
     return result.stdout.strip()
@@ -24,7 +29,8 @@ def create_branch(name: str) -> str:
 
 def is_repo() -> bool:
     result = subprocess.run(["git", "rev-parse", "--git-dir"],
-                            capture_output=True, text=True)
+                            capture_output=True, text=True,
+                            encoding="utf-8", errors="replace")
     return result.returncode == 0
 
 
@@ -63,7 +69,8 @@ def changed_files() -> list[str]:
 def ref_exists(ref: str) -> bool:
     """True when `ref` resolves to a commit. Never raises — this is a question."""
     result = subprocess.run(["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"],
-                            capture_output=True, text=True)
+                            capture_output=True, text=True,
+                            encoding="utf-8", errors="replace")
     return result.returncode == 0
 
 

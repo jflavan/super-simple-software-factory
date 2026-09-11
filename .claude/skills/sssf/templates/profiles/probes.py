@@ -125,8 +125,9 @@ def node_packages(root: Path, marker: str,
     found = []
     for manifest in sorted(p for p in walk(root) if p.name == "package.json"):
         try:
-            package = json.loads(manifest.read_text(errors="replace"))
-        except (json.JSONDecodeError, UnicodeDecodeError):
+            package = json.loads(
+                manifest.read_text(encoding="utf-8", errors="replace"))
+        except json.JSONDecodeError:   # errors="replace" cannot raise
             # A broken manifest is the repo's problem, not a reason to abort an
             # install. A caller that passed `unreadable` finds out why a
             # package it expected is missing.
@@ -205,7 +206,8 @@ def _summary(runner: RunnerProbe, root: Path) -> tuple[list[str] | None, str]:
         return None, f"{runner.name} is not installed"
     try:
         completed = subprocess.run([binary, *runner.summary[1:]], cwd=root,
-                                   text=True, capture_output=True, timeout=30)
+                                   text=True, encoding="utf-8", errors="replace",
+                                   capture_output=True, timeout=30)
     except subprocess.TimeoutExpired:
         return None, f"{' '.join(runner.summary)} timed out"
     except (OSError, subprocess.SubprocessError) as error:
@@ -233,7 +235,9 @@ def task_runner(root: Path) -> tuple[str, list[str], str]:
         recipes, reason = _summary(runner, root)
         if recipes is not None:
             return runner.name, recipes, reason
-        return (runner.name, runner.parse_marker(marker.read_text(errors="replace")),
+        return (runner.name,
+                runner.parse_marker(
+                    marker.read_text(encoding="utf-8", errors="replace")),
                 f"{marker.name} ({reason})")
     return "", [], ""
 
@@ -255,6 +259,7 @@ def default_branch(root: Path) -> str:
                  ["rev-parse", "--abbrev-ref", "origin/master"]):
         try:
             completed = subprocess.run(["git", *args], cwd=root, text=True,
+                                       encoding="utf-8", errors="replace",
                                        capture_output=True, timeout=5)
         except (OSError, subprocess.SubprocessError):
             return "main"
