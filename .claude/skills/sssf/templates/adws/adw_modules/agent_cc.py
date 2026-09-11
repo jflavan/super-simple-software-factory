@@ -222,8 +222,11 @@ ARG_VALUE_CHARS = 20_000
 LABEL_CHARS = 80
 
 # The arg that identifies a call at a glance, in the order Claude Code's tools
-# tend to use. Mirrors agent_pi.PRIMARY_ARGS so labels read the same in the
-# trace regardless of which backend produced them.
+# tend to use — its file tools take `file_path`, where pi's take `path`, so this
+# is deliberately ordered differently from agent_pi.PRIMARY_ARGS rather than
+# copied from it. What the two trackers must agree on is the record's SHAPE, not
+# which arg a label prefers; the orders only diverge for a tool carrying both
+# keys, which neither backend has.
 PRIMARY_ARGS = ("command", "file_path", "path", "pattern", "query", "url")
 
 
