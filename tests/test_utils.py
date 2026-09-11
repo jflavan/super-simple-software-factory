@@ -53,3 +53,22 @@ def test_operator_env_is_a_passthrough_without_a_venv(monkeypatch):
     monkeypatch.setenv("PATH", "/usr/bin")
 
     assert utils.operator_env()["PATH"] == "/usr/bin"
+
+
+def test_operator_env_strips_a_differently_written_venv_path(monkeypatch):
+    """PATH entries are compared as paths, not as strings.
+
+    The variant is built without calling venv_bin_dir, so a bug in the
+    normalization cannot hide behind both sides computing the same string.
+    """
+    root = Path.cwd() / "sssf-test-venv"
+    leaf = "Scripts" if os.name == "nt" else "bin"
+    variant = os.path.join(str(root.parent), "sssf-test-venv", "..",
+                           "sssf-test-venv", leaf)
+    monkeypatch.setenv("VIRTUAL_ENV", str(root))
+    monkeypatch.setenv("PATH", os.pathsep.join([variant, "/usr/bin"]))
+
+    env = utils.operator_env()
+
+    assert variant not in env["PATH"].split(os.pathsep)
+    assert "/usr/bin" in env["PATH"].split(os.pathsep)

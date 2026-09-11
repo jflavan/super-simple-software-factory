@@ -27,6 +27,17 @@ def venv_bin_dir(venv: str, windows: bool | None = None) -> str:
     return str(Path(venv) / ("Scripts" if windows else "bin"))
 
 
+def _comparable_path(path: str) -> str:
+    """A PATH entry reduced to a form two spellings of the same directory share.
+
+    normpath collapses `..` and redundant separators; normcase folds case and
+    slash direction on Windows. Neither resolves symlinks — that needs the path
+    to exist and costs a stat per PATH entry, which is not worth it for a
+    comparison whose worst failure is leaving one extra directory on PATH.
+    """
+    return os.path.normcase(os.path.normpath(path))
+
+
 def operator_env() -> dict[str, str]:
     """The engineer's own environment, as their shell would hand it over.
 
@@ -46,9 +57,9 @@ def operator_env() -> dict[str, str]:
     venv = env.pop("VIRTUAL_ENV", "")
     if not venv:
         return env
-    venv_bin = os.path.normcase(venv_bin_dir(venv).rstrip("\\/"))
+    venv_bin = _comparable_path(venv_bin_dir(venv))
     parts = [p for p in env.get("PATH", "").split(os.pathsep)
-             if p and os.path.normcase(p.rstrip("\\/")) != venv_bin]
+             if p and _comparable_path(p) != venv_bin]
     env["PATH"] = os.pathsep.join(parts)
     return env
 
