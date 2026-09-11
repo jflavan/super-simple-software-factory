@@ -4,7 +4,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from profile_fixtures import CSPROJ_APP, dotnet_svelte_repo, package, sln, write
+from profile_fixtures import CSPROJ_APP, JUSTFILE, dotnet_svelte_repo, package, sln, write
 
 INSTALL = (Path(__file__).resolve().parent.parent
            / ".claude" / "skills" / "sssf" / "scripts" / "install.py")
@@ -112,3 +112,71 @@ def test_installing_twice_is_idempotent(tmp_path):
     second = _generated(tmp_path)["blocks"].read_text()
     # the generated file is rewritten from facts, so its blocks are identical
     assert first.split("BLOCKS = [")[1] == second.split("BLOCKS = [")[1]
+
+
+def test_detection_precedes_stamping_so_a_bare_repo_reports_no_task_runner(tmp_path):
+    """Detection must run before base stamping writes the factory's own
+    justfile - otherwise a repo with no task runner at all is reported as
+    using `just`, because SSSF's own justfile just landed on disk. A repo
+    that already has its own justfile must still be reported correctly."""
+    bare = tmp_path / "bare"
+    dotnet_svelte_repo(bare)
+    result = _install(bare)
+    assert result.returncode == 0, result.stderr
+    assert "task runner: (none)" in result.stdout
+    assert "task runner: just" not in result.stdout
+
+    owns_one = tmp_path / "owns_one"
+    dotnet_svelte_repo(owns_one, justfile_text=JUSTFILE)
+    result = _install(owns_one)
+    assert result.returncode == 0, result.stderr
+    assert "task runner: just" in result.stdout
+    assert "recipes)" in result.stdout
+
+
+def test_doctor_writes_nothing_at_all(tmp_path):
+    dotnet_svelte_repo(tmp_path)
+    before = sorted(p.relative_to(tmp_path).as_posix()
+                    for p in tmp_path.rglob("*") if p.is_file())
+
+    result = _install(tmp_path, "--doctor")
+
+    after = sorted(p.relative_to(tmp_path).as_posix()
+                   for p in tmp_path.rglob("*") if p.is_file())
+    assert result.returncode == 0, result.stderr
+    assert before == after
+
+
+def test_doctor_reports_the_detection(tmp_path):
+    dotnet_svelte_repo(tmp_path, frontends=["apps/web"])
+    result = _install(tmp_path, "--doctor")
+    assert "Fixture.sln" in result.stdout
+    assert "apps/web" in result.stdout
+    assert "integration-tests" in result.stdout
+    assert "nothing was written" in result.stdout
+
+
+def test_doctor_reports_drift_after_a_restructure(tmp_path):
+    """Install, move a frontend, then ask doctor what it would wire now."""
+    dotnet_svelte_repo(tmp_path, frontends=["apps/web"])
+    _install(tmp_path)
+    assert "apps/web" in _generated(tmp_path)["blocks"].read_text()
+
+    (tmp_path / "apps" / "web").rename(tmp_path / "frontend")
+    result = _install(tmp_path, "--doctor")
+
+    assert "frontend" in result.stdout
+    # the stale generated file is untouched, which is the drift being reported
+    assert "apps/web" in _generated(tmp_path)["blocks"].read_text()
+
+
+def test_doctor_on_an_unrecognised_repo_says_so_and_succeeds(tmp_path):
+    (tmp_path / "main.go").write_text("package main\n")
+    result = _install(tmp_path, "--doctor")
+    assert result.returncode == 0
+    assert "no profile" in result.stdout.lower()
+
+
+def test_doctor_output_is_ascii(tmp_path):
+    dotnet_svelte_repo(tmp_path)
+    _install(tmp_path, "--doctor").stdout.encode("ascii")

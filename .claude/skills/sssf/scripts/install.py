@@ -170,6 +170,16 @@ def main() -> int:
     root = Path.cwd()
     stamped, skipped = [], []
 
+    profile = select_profile(root, args.profile, args.no_profile)
+
+    facts = None
+    if profile is not None:
+        # Detected BEFORE stamping. Stamping writes the factory's own justfile
+        # into a repo that has none, and detection would then report SSSF's
+        # recipes as if they were the repo's - true of the tree on disk, and
+        # misleading about the repository.
+        facts = profile.detect(root)
+
     if not args.doctor:
         stamp(TEMPLATES / "adws", root / "adws", args.force, stamped, skipped)
         stamp(TEMPLATES / "prompt_engineering",
@@ -193,11 +203,10 @@ def main() -> int:
         if skipped:
             print(f"  skipped (already exist, use --force to overwrite): {len(skipped)}")
 
-    profile = select_profile(root, args.profile, args.no_profile)
-    if profile is not None:
-        if not args.doctor:
+        if profile is not None:
             stamp_profile_gates(profile, root, args.force, stamped, skipped)
-        facts = profile.detect(root)
+
+    if profile is not None:
         report = profile.generate(facts, root, write=not args.doctor)
         print_profile_report(profile, facts, report)
 
