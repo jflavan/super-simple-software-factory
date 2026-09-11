@@ -36,3 +36,17 @@ def thinking_env(level: str) -> dict[str, str]:
         raise ValueError(f"unknown thinking level {level!r} — expected one of "
                          f"{', '.join(THINKING_TOKENS)}")
     return {} if budget == 0 else {"MAX_THINKING_TOKENS": str(budget)}
+
+
+def apply_thinking(env: dict[str, str], level: str) -> dict[str, str]:
+    """Make `env` reflect `level`, and return it.
+
+    A dict of things to SET cannot express "off": the child environment starts
+    as a copy of the operator's, so leaving MAX_THINKING_TOKENS alone lets an
+    inherited value through and an agent configured `off` thinks anyway. The
+    variable is therefore always removed first, then set only when the level
+    asks for a budget.
+    """
+    env.pop("MAX_THINKING_TOKENS", None)
+    env.update(thinking_env(level))
+    return env
