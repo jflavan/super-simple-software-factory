@@ -1246,6 +1246,45 @@ The one subprocess integration point. `_popen` is a module-level seam so the str
 - Modify: `.claude/skills/sssf/templates/adws/adw_modules/agent_cc.py`
 - Test: `tests/test_agent_cc.py`
 
+**Carried over from the Task 6 review — do this as part of this task.** `apply_thinking`
+currently pops `MAX_THINKING_TOKENS` *before* `thinking_env` validates the level, so an
+unknown level mutates the caller's dict and then raises. Harmless at the call site below
+(the env is fresh and discarded on error), but it is a side effect on a failed call.
+Restructure it to validate first, which also avoids looking the level up twice:
+
+```python
+def apply_thinking(env: dict[str, str], level: str) -> dict[str, str]:
+    """Make `env` reflect `level`, and return it.
+
+    A dict of things to SET cannot express "off": the child environment starts
+    as a copy of the operator's, so leaving MAX_THINKING_TOKENS alone lets an
+    inherited value through and an agent configured `off` thinks anyway. The
+    variable is therefore removed first, then set only when the level asks for
+    a budget — and the level is validated before anything is touched, so a bad
+    level leaves the environment exactly as it found it.
+    """
+    budget = THINKING_TOKENS.get(level)
+    if budget is None:
+        raise ValueError(f"unknown thinking level {level!r} — expected one of "
+                         f"{', '.join(THINKING_TOKENS)}")
+    env.pop("MAX_THINKING_TOKENS", None)
+    if budget:
+        env["MAX_THINKING_TOKENS"] = str(budget)
+    return env
+```
+
+Add a test pinning the new guarantee:
+
+```python
+def test_apply_thinking_leaves_the_env_alone_when_the_level_is_bad():
+    env = {"MAX_THINKING_TOKENS": "31337"}
+
+    with pytest.raises(ValueError, match="unknown thinking level"):
+        agent_cc.apply_thinking(env, "ludicrous")
+
+    assert env["MAX_THINKING_TOKENS"] == "31337", "a failed call must not mutate"
+```
+
 - [ ] **Step 1: Write the failing test**
 
 Append to `tests/test_agent_cc.py`:
