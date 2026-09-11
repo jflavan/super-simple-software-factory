@@ -6,25 +6,27 @@ the same answer every time. Agents are for the parts that need reading and
 deciding.
 
 ╔══════════════════════════════════════════════════════════════════════════════╗
-║  REPLACE THE PLACEHOLDER COMMANDS BELOW.                                     ║
+║  WHERE THE COMMANDS COME FROM.                                               ║
 ║                                                                              ║
-║  Every block ships as an `echo` that exits 0 and announces it is fake. They   ║
-║  are placeholders on purpose: a stamped repo has no way to guess your test    ║
-║  runner, and a wrong-but-plausible command that silently passes is worse      ║
-║  than one that says so out loud.                                             ║
+║  `blocks()` returns adws/adw_modules/quality_blocks.py when it exists — a     ║
+║  generated file holding this repo's real commands, written by                ║
+║  `install.py --profile <name>` from what it found in the tree. Re-probe       ║
+║  after a restructure with `install.py --doctor`.                             ║
 ║                                                                              ║
-║  For each block you want: swap `_placeholder(...)` for the real argv, e.g.    ║
-║      argv=["bun", "test", "apps/web/server.test.ts"]                         ║
-║      argv=["uv", "run", "pytest", "-q"]                                      ║
-║      argv=["npm", "run", "lint"]                                             ║
-║  Delete the blocks you don't need, and drop them from run_quality()'s list.   ║
+║  With no generated file, PLACEHOLDER_BLOCKS are used: every one is an `echo`  ║
+║  that exits 0 and says out loud that it is fake. They are placeholders on     ║
+║  purpose — a wrong-but-plausible command that silently passes is worse than   ║
+║  one that admits it.                                                         ║
 ║                                                                              ║
-║  Two rules when you write the real command:                                  ║
+║  To write blocks by hand, edit quality_blocks.py — it is plain Python, and    ║
+║  a list of QualityCheckSpec. Three rules when you do:                        ║
 ║    1. argv LIST, never a shell string — no quoting bugs, no shell injection.  ║
-║    2. Call binaries by BARE NAME. These blocks inherit the operator's         ║
-║       environment (see utils.operator_env), so `bun`, `uv`, `pytest` resolve  ║
-║       exactly as they do in their terminal. Never hard-code an absolute path  ║
-║       like /Users/you/.bun/bin/bun — that bakes your machine into the trace.  ║
+║    2. Call binaries by BARE NAME. Blocks inherit the operator's environment   ║
+║       (see utils.operator_env) and resolve through utils.resolve_argv, so     ║
+║       `npm`, `dotnet`, `just` resolve as they do in their terminal. Never     ║
+║       hard-code an absolute path — that bakes your machine into the trace.    ║
+║    3. Set `tier="full"` on anything slow or service-dependent, so bounded     ║
+║       fix loops do not pay for it on every retry.                            ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 """
 
@@ -34,7 +36,6 @@ import shlex
 import subprocess
 import time
 from pathlib import Path
-from typing import Callable
 
 from .data_types import (EventRecord, QualityCheckResult, QualityCheckSpec, QualityResult,
                          VerifyOutput)
@@ -44,12 +45,6 @@ from .utils import now_iso, operator_env, resolve_argv
 # for a builder to act on without opening the artifact; bounded so a runaway
 # stack trace can't swamp the next agent's context.
 TAIL_CHARS = 4_000
-
-
-def _placeholder(name: str) -> list[str]:
-    """A command that does nothing and admits it. Replace every call to this."""
-    return ["echo", f"PLACEHOLDER {name}: edit adws/adw_modules/quality.py and "
-                    f"replace this echo with the real {name} command"]
 
 
 def _check_dir(run, name: str) -> Path:
@@ -137,61 +132,83 @@ def _run(spec: QualityCheckSpec, run) -> QualityCheckResult:
 
 
 # ── Blocks ────────────────────────────────────────────────────────────────────
-# Replace every argv below. See the banner at the top of this file.
 
-def test(run) -> QualityCheckResult:
-    """Run the project's test suite. The highest-value block to wire up first."""
-    return _run(QualityCheckSpec(
-        name="test",
+def _placeholder(name: str) -> QualityCheckSpec:
+    """A command that does nothing and admits it."""
+    return QualityCheckSpec(
+        name=name,
         area="backend",
-        operation="build",
-        argv=_placeholder("test"),        # e.g. ["bun", "test"] or ["uv", "run", "pytest", "-q"]
-        timeout_seconds=600,
-    ), run)
+        operation="build" if name in ("test", "build") else name,
+        argv=["echo", f"PLACEHOLDER {name}: no profile generated "
+                      f"adws/adw_modules/quality_blocks.py, and nobody wrote the "
+                      f"real {name} command by hand"],
+        timeout_seconds=600 if name == "test" else 120,
+    )
 
 
-def lint(run) -> QualityCheckResult:
-    return _run(QualityCheckSpec(
-        name="lint",
-        area="backend",
-        operation="lint",
-        argv=_placeholder("lint"),        # e.g. ["bun", "x", "oxlint@1.36.0", "src"]
-    ), run)
+PLACEHOLDER_BLOCKS = [_placeholder(n) for n in ("test", "lint", "typecheck", "build")]
 
 
-def typecheck(run) -> QualityCheckResult:
-    return _run(QualityCheckSpec(
-        name="typecheck",
-        area="backend",
-        operation="typecheck",
-        argv=_placeholder("typecheck"),   # e.g. ["bun", "x", "tsc", "--noEmit"]
-    ), run)
+def _import_generated_blocks() -> list[QualityCheckSpec] | None:
+    """The generated block list, or None when no profile ever wrote one.
+
+    Only a missing quality_blocks module means "not generated". Any OTHER
+    import error — a typo in the generated file, a dependency it needs that is
+    not installed — is re-raised. Swallowing it would replace a real command
+    with an `echo` that exits 0, which is the exact failure this whole profile
+    mechanism exists to remove.
+    """
+    try:
+        from .quality_blocks import BLOCKS
+    except ModuleNotFoundError as error:
+        if error.name in ("adw_modules.quality_blocks", "quality_blocks"):
+            return None
+        raise
+    return list(BLOCKS)
 
 
-def build(run) -> QualityCheckResult:
-    output_dir = _check_dir(run, "build") / "bundle"
-    return _run(QualityCheckSpec(
-        name="build",
-        area="backend",
-        operation="build",
-        argv=_placeholder("build"),       # e.g. ["bun", "build", "src/index.ts", "--outdir", str(output_dir)]
-    ), run)
+def blocks() -> list[QualityCheckSpec]:
+    """This repo's quality blocks: generated if a profile wrote them, else fakes."""
+    generated = _import_generated_blocks()
+    return list(generated) if generated is not None else list(PLACEHOLDER_BLOCKS)
+
+
+def _run_tier(run, tiers: set[str]) -> QualityResult:
+    """Run every block in the given tiers and collect ALL failures.
+
+    Ordering contract for the caller: a failing block does NOT fail the phase.
+    The runner did its job; the CODE is what failed. Hand this result to the
+    builder and let the bounded repair loop decide the run's fate.
+    """
+    checks = [_run(spec, run) for spec in blocks() if spec.tier in tiers]
+    # A failure is the command, its exit code, and what it actually printed —
+    # everything a builder needs to repair without opening a log or being told
+    # what the error "means" by a parser that guessed.
+    failures = [
+        f"{check.name}: `{check.command}` exited {check.returncode}\n{check.output_tail}".rstrip()
+        for check in checks if not check.passed
+    ]
+    return QualityResult(
+        passed=not failures,
+        checks=checks,
+        failures=failures,
+        artifacts=[check.output_artifact for check in checks],
+    )
 
 
 def run_tests(run) -> QualityResult:
-    """The test suite alone, as a QualityResult — the deterministic test phase.
+    """The FAST tier — the deterministic verification inside a bounded fix loop.
 
-    This is what replaces a `tester` agent once the command is written down. An
-    agent rediscovering the runner on every run costs a fortune to learn what a
-    subprocess already knows; the repair loop is unchanged, because a failure
-    still reaches the builder through `as_envelope` below.
+    This is what replaces a `tester` agent once the commands are written down.
+    An agent rediscovering the runner on every run costs a fortune to learn
+    what a subprocess already knows; the repair loop is unchanged, because a
+    failure still reaches the builder through `as_envelope`.
+
+    Fast, not "tests": a typecheck that takes two seconds belongs in the loop
+    that runs on every retry, and a Testcontainers suite that needs Docker up
+    does not. Which is which is the block's `tier`.
     """
-    check = test(run)
-    failures = ([] if check.passed else
-                [f"{check.name}: `{check.command}` exited {check.returncode}\n"
-                 f"{check.output_tail}".rstrip()])
-    return QualityResult(passed=check.passed, checks=[check], failures=failures,
-                         artifacts=[check.output_artifact])
+    return _run_tier(run, {"fast"})
 
 
 def as_envelope(result: QualityResult, what: str) -> VerifyOutput:
@@ -216,29 +233,5 @@ def as_envelope(result: QualityResult, what: str) -> VerifyOutput:
 
 
 def run_quality(run) -> QualityResult:
-    """Run every block and collect ALL failures — one pass tells you everything.
-
-    Ordering contract for the caller: a failing block does NOT fail the phase.
-    The runner did its job; the CODE is what failed. Hand this result to the
-    builder and let the bounded repair loop decide the run's fate.
-    """
-    blocks: list[Callable] = [
-        test,
-        lint,
-        typecheck,
-        build,
-    ]
-    checks = [block(run) for block in blocks]
-    # A failure is the command, its exit code, and what it actually printed —
-    # everything a builder needs to repair without opening a log or being told
-    # what the error "means" by a parser that guessed.
-    failures = [
-        f"{check.name}: `{check.command}` exited {check.returncode}\n{check.output_tail}".rstrip()
-        for check in checks if not check.passed
-    ]
-    return QualityResult(
-        passed=not failures,
-        checks=checks,
-        failures=failures,
-        artifacts=[check.output_artifact for check in checks],
-    )
+    """Every tier — final verification, run once."""
+    return _run_tier(run, {"fast", "full"})
