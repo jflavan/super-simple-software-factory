@@ -38,7 +38,7 @@ from typing import Callable
 
 from .data_types import (EventRecord, QualityCheckResult, QualityCheckSpec, QualityResult,
                          VerifyOutput)
-from .utils import now_iso, operator_env
+from .utils import now_iso, operator_env, resolve_argv
 
 # How much of a failing command's output rides back inside the envelope. Enough
 # for a builder to act on without opening the artifact; bounded so a runaway
@@ -73,7 +73,7 @@ def _run(spec: QualityCheckSpec, run) -> QualityCheckResult:
     stderr = ""
     try:
         completed = subprocess.run(
-            spec.argv,
+            resolve_argv(spec.argv),
             cwd=run.repo_root,
             env=env,
             capture_output=True,

@@ -6,7 +6,7 @@ argument-hint: "[install | create adw | run adw | update config | ...]"
 
 # Super Simple Software Factory (SSSF)
 
-Reusable combination of **agents plus code**: deterministic Python ADW scripts own sequencing, retries, and acceptance; coding agents (Pi in v1) work inside bounded phases; typed JSON envelopes carry context between them; everything streams into SQLite for the polled visualizer. Agent proposes, code disposes.
+Reusable combination of **agents plus code**: deterministic Python ADW scripts own sequencing, retries, and acceptance; coding agents (Pi or Claude Code) work inside bounded phases; typed JSON envelopes carry context between them; everything streams into SQLite for the polled visualizer. Agent proposes, code disposes.
 
 ## Startup
 
@@ -71,6 +71,18 @@ Deep specs, when needed: [references/config.md](references/config.md) · [refere
 9. **`tools:` is a capability list, `writes:` is the boundary** — `bash` runs anything (including `git checkout`) and `write` reaches any path, so a tool list can never make "this agent changes nothing" true. `writes:` per agent and `protected_files` in defaults are enforced in `adw_modules/permissions.py` after every agent call: unauthorized changes are rolled back and the phase dies. The session runtime under `data_dir` is always writable — a read-only agent is read-only with respect to the REPO, never mute.
 10. **Every ADW ends in `run.finish()`** — phases passing is not the same as the run being accepted. A test phase that ran a red suite succeeded at its job. Pass `accepted=` so the exit code, the session status, and the banner are decided together and cannot disagree.
 
-## v1 scope
+## Coding-agent backends
 
-Pi coding agent only (`coding_agent: pi`), default model `gemini-3.6-flash` via openrouter, thinking `medium`. `claude_code` is schema-valid but stubbed until v2. The visualizer app ships in a later pass — observe via sqlite queries until then.
+Two backends. `coding_agent: pi` (default) runs the Pi agent; `coding_agent: claude_code`
+runs Claude Code. Both expose the same interface to `agents.py`, so an ADW never knows
+which one ran a phase.
+
+Three differences are real and enforced at validation, not discovered at runtime:
+
+- `harness_engineering` is a pi extension mechanism. A `claude_code` agent that declares
+  one fails validation.
+- The `subagent_*` tools come from that extension, so they are pi-only too.
+- `tools: []` is refused for a Claude Code agent: an agent allowed nothing cannot act.
+  Omit the key entirely to ask for every tool.
+
+The visualizer app ships in a later pass — read the trace with `uv run adws/adw_trace.py`.

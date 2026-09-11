@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import secrets
+import shutil
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -11,6 +12,30 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 load_dotenv()
+
+
+def venv_bin_dir(venv: str, windows: bool | None = None) -> str:
+    """The directory a virtualenv puts executables in.
+
+    Split out, with an explicit `windows` flag, so both branches are testable
+    on either platform. uv writes to `Scripts` on Windows and `bin` elsewhere;
+    operator_env previously stripped only `bin`, so on Windows it stripped
+    nothing and the shadowing hazard it documents went unmitigated.
+    """
+    if windows is None:
+        windows = os.name == "nt"
+    return str(Path(venv) / ("Scripts" if windows else "bin"))
+
+
+def _comparable_path(path: str) -> str:
+    """A PATH entry reduced to a form two spellings of the same directory share.
+
+    normpath collapses `..` and redundant separators; normcase folds case and
+    slash direction on Windows. Neither resolves symlinks — that needs the path
+    to exist and costs a stat per PATH entry, which is not worth it for a
+    comparison whose worst failure is leaving one extra directory on PATH.
+    """
+    return os.path.normcase(os.path.normpath(path))
 
 
 def operator_env() -> dict[str, str]:
@@ -32,10 +57,29 @@ def operator_env() -> dict[str, str]:
     venv = env.pop("VIRTUAL_ENV", "")
     if not venv:
         return env
-    venv_bin = str(Path(venv) / "bin")
-    parts = [p for p in env.get("PATH", "").split(os.pathsep) if p and p != venv_bin]
+    venv_bin = _comparable_path(venv_bin_dir(venv))
+    parts = [p for p in env.get("PATH", "").split(os.pathsep)
+             if p and _comparable_path(p) != venv_bin]
     env["PATH"] = os.pathsep.join(parts)
     return env
+
+
+def resolve_argv(argv: list[str]) -> list[str]:
+    """Resolve argv[0] to an absolute executable path.
+
+    On Windows `npm` is `npm.cmd`, and a bare-name argv raises WinError 2 in
+    subprocess.run — which quality.py catches as an OSError and reports as
+    exit 127, making a PATH problem indistinguishable from a command that ran
+    and failed. shutil.which honours PATHEXT, so it finds the shim.
+
+    When nothing resolves, the argv is returned unchanged: that failure is a
+    genuinely missing binary, and the existing exit-127 path reports it
+    correctly with the real message.
+    """
+    if not argv:
+        return list(argv)
+    found = shutil.which(argv[0])
+    return [found, *argv[1:]] if found else list(argv)
 
 
 def new_id(length: int = 8) -> str:

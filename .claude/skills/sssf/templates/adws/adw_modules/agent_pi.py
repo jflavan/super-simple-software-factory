@@ -1,4 +1,4 @@
-"""Pi coding agent interface — v1's only coding agent.
+"""Pi coding agent interface — one of two coding-agent backends.
 
 Runs `pi -p --mode json` and tails its JSONL stdout line by line, forwarding
 each event to a callback WHILE the agent works (the streaming crack, solved
@@ -16,7 +16,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Callable, Optional
 
-from .data_types import PiRequest, PiResult
+from .data_types import AgentRequest, AgentResult
 from .utils import now_iso, operator_env
 
 PI_PATH = os.environ.get("PI_PATH", "pi")
@@ -90,6 +90,12 @@ def resolve_model(pattern: str) -> tuple[str, str]:
     raise ValueError(f"model pattern {pattern!r} is ambiguous: {matches}")
 
 
+def validate_agent(agent) -> list[str]:
+    """Config problems this backend can detect. pi accepts everything the
+    schema allows; the model check lives in resolve_model."""
+    return []
+
+
 def _context_tokens(usage: dict) -> int:
     """Tokens occupying the window after a turn.
 
@@ -143,8 +149,8 @@ class ToolCallTracker:
 
     pi announces a call as a `toolCall` content block, then emits
     tool_execution_start / _update / _end for it. Only the end carries the
-    result, so that is where a record is emitted — one trace event per real
-    tool call, the moment it returns, instead of three shapeless ones.
+    result, so that is where a record is emitted — the record for the one
+    real tool call that just returned, instead of three shapeless ones.
 
     The record carries the call's real span (`started_at`/`ended_at`), which the
     tracer writes to columns so the UI can lay tool calls on a time axis without
@@ -154,21 +160,27 @@ class ToolCallTracker:
     def __init__(self) -> None:
         self._open: dict[str, dict] = {}
 
-    def observe(self, event: dict) -> Optional[dict]:
-        """Returns the record for a finished tool call, else None."""
+    def observe(self, event: dict) -> list[dict]:
+        """Returns the records for any tool calls that finished on this event.
+
+        A list, not an optional single record: Claude Code can close several
+        calls in one message, and both backends have to normalize to the same
+        shape for agents._event_forwarder to stay backend-agnostic. pi closes
+        at most one at a time, so this is [] or a single-element list.
+        """
         etype = event.get("type", "")
         if etype == "message_end":
             for block in event.get("message", {}).get("content", []) or []:
                 if isinstance(block, dict) and block.get("type") == "toolCall":
                     self._announce(block.get("id"), block.get("name"),
                                    block.get("arguments"))
-            return None
+            return []
         if etype == "tool_execution_start":
             self._announce(event.get("toolCallId"), event.get("toolName"),
                            event.get("args"))
-            return None
+            return []
         if etype != "tool_execution_end":
-            return None
+            return []
 
         call_id = str(event.get("toolCallId") or "")
         opened = self._open.pop(call_id, {})
@@ -190,7 +202,7 @@ class ToolCallTracker:
             record["duration_ms"] = int((time.monotonic() - opened["clock"]) * 1000)
         if opened.get("started_at"):
             record["started_at"] = opened["started_at"]
-        return record
+        return [record]
 
     def _announce(self, call_id, tool, args) -> None:
         """First sighting starts the clock; a later sighting only fills gaps."""
@@ -205,9 +217,9 @@ class ToolCallTracker:
         }
 
 
-def run(request: PiRequest, on_event: Optional[Callable[[dict], None]] = None,
+def run(request: AgentRequest, on_event: Optional[Callable[[dict], None]] = None,
         on_spawn: Optional[Callable[[int], None]] = None,
-        on_exit: Optional[Callable[[int], None]] = None) -> PiResult:
+        on_exit: Optional[Callable[[int], None]] = None) -> AgentResult:
     """Run one non-interactive pi turn.
 
     `on_spawn(pid)` and `on_exit(pid)` bracket the child process so the caller
@@ -232,8 +244,8 @@ def run(request: PiRequest, on_event: Optional[Callable[[dict], None]] = None,
     raw_path = Path(request.raw_output_path)
     raw_path.parent.mkdir(parents=True, exist_ok=True)
 
-    result = PiResult(session_id=request.session_id,
-                      context_window=context_window(provider, model_id))
+    result = AgentResult(session_id=request.session_id,
+                         context_window=context_window(provider, model_id))
     # stdin is DEVNULL, deliberately. The prompt travels in argv, so the child
     # never needs stdin — but inheriting the parent's means pi sees a non-TTY
     # and can sit forever waiting for piped input that will never arrive or
