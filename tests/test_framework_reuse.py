@@ -101,8 +101,8 @@ def test_its_blocks_are_generated_beside_the_other_framework_s(tmp_path, monkeyp
     ast.parse((repo / "adws" / "adw_modules" / "quality_blocks.py").read_text())
 
 
-def test_a_framework_with_no_gates_and_no_overlay_composes_cleanly(tmp_path,
-                                                                   monkeypatch):
+def test_a_missing_overlay_fragment_is_skipped_rather_than_fatal(tmp_path,
+                                                                monkeypatch):
     """Composing still works when the third framework's files are not stamped.
 
     NOTE on the assertions below: `fake_framework` deliberately declares a

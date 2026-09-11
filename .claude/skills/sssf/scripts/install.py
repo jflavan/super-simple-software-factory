@@ -86,11 +86,25 @@ def stamp_profile_gates(profile, root: Path, force: bool,
     silently overwriting their edit on a re-install would be the one thing this
     installer has never done.
     """
+    missing = []
     for module in profile.gate_modules():
         source = PROFILE_GATES_SRC / f"{module}.py"
         if source.is_file():
             stamp(source, root / "adws" / "adw_modules" / f"{module}.py",
                   force, stamped, skipped)
+        else:
+            missing.append(module)
+    if missing:
+        # gate_modules() is declarative - it reports what the frameworks DECLARE,
+        # without consulting the disk. A framework that names a GATE_MODULE it
+        # never shipped would otherwise produce a generated profile_gates.py
+        # importing a module nobody stamped, and that surfaces as an ImportError
+        # inside an ADW run, an install later. Refuse here instead.
+        raise SystemExit(
+            f"profile {profile.NAME!r} declares gate module(s) with no source "
+            f"file: {', '.join(sorted(missing))}. Expected them under "
+            f"{PROFILE_GATES_SRC}. A framework declaring GATE_MODULE must ship "
+            f"it (step 2 of ADDING A FRAMEWORK).")
 
 
 def print_profile_report(profile, facts, report) -> None:
