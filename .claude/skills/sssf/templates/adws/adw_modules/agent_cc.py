@@ -50,3 +50,40 @@ def apply_thinking(env: dict[str, str], level: str) -> dict[str, str]:
     env.pop("MAX_THINKING_TOKENS", None)
     env.update(thinking_env(level))
     return env
+
+
+TOOL_NAMES = {
+    "read": "Read",
+    "bash": "Bash",
+    "edit": "Edit",
+    "write": "Write",
+    "grep": "Grep",
+    "find": "Glob",
+    "ls": "Bash",
+}
+
+
+def allowed_tools(tools: list[str] | None) -> list[str] | None:
+    """SSSF's tool names as a Claude Code --allowedTools list.
+
+    None means every tool, matching the config's "no tools key" semantics.
+    An unmappable name raises rather than being dropped: a silently filtered
+    tool is invisible at runtime, which is precisely the failure the config
+    file warns about for pi extensions.
+    """
+    if tools is None:
+        return None
+    mapped: list[str] = []
+    unknown: list[str] = []
+    for tool in tools:
+        name = TOOL_NAMES.get(tool)
+        if name is None:
+            unknown.append(tool)
+        elif name not in mapped:
+            mapped.append(name)
+    if unknown:
+        raise ValueError(
+            f"no Claude Code equivalent for tool(s): {', '.join(unknown)}. "
+            f"pi extension tools (subagent_*) have no counterpart — remove them "
+            f"from this agent, or run it on coding_agent: pi.")
+    return mapped

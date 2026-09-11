@@ -48,3 +48,25 @@ def test_apply_thinking_sets_a_budget_on_a_clean_env():
 def test_apply_thinking_rejects_an_unknown_level():
     with pytest.raises(ValueError, match="unknown thinking level"):
         agent_cc.apply_thinking({}, "ludicrous")
+
+
+def test_tools_map_to_claude_code_names():
+    assert agent_cc.allowed_tools(["read", "write", "grep"]) == ["Read", "Write", "Grep"]
+
+
+def test_find_maps_to_glob():
+    assert agent_cc.allowed_tools(["find"]) == ["Glob"]
+
+
+def test_ls_and_bash_collapse_without_duplicating():
+    # Both map to Bash; the allowlist must not repeat it.
+    assert agent_cc.allowed_tools(["bash", "ls"]) == ["Bash"]
+
+
+def test_none_means_every_tool():
+    assert agent_cc.allowed_tools(None) is None
+
+
+def test_a_pi_extension_tool_is_rejected_by_name():
+    with pytest.raises(ValueError, match="subagent_create"):
+        agent_cc.allowed_tools(["read", "subagent_create"])
