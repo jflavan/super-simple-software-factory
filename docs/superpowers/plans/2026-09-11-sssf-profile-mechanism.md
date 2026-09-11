@@ -130,7 +130,7 @@ Five, each a refinement rather than a reduction. Recorded here so a spec reviewe
 | File | Change |
 |---|---|
 | `templates/adws/adw_modules/data_types.py` | `QualityCheckSpec` gains `tier` + `cwd`; new `DocPolicyRule`; `SSSFConfig` gains `doc_policy`. |
-| `templates/adws/adw_modules/utils.py` | `glob_to_regex`, `path_matches`, `repo_relative`, `changed_files`, `read_text`. |
+| `templates/adws/adw_modules/utils.py` | `glob_to_regex`, `path_matches`, `repo_relative`, `claimed_files`, `read_text`. |
 | `templates/adws/adw_modules/permissions.py` | Uses `utils.path_matches`; its private `_glob`/`_matches` are removed. |
 | `templates/adws/adw_modules/quality.py` | Blocks become data; `blocks()` loader; `run_tests` = fast tier, `run_quality` = all tiers; `_run` honours `spec.cwd`. |
 | `templates/adws/adw_modules/gates.py` | New `doc_policy` gate and `profile_gates()` loader. |
@@ -545,7 +545,7 @@ git commit -m "feat(quality): blocks become data, fast tier drives the fix loop"
 
 One latent bug comes with it: `**/*.md` currently compiles to `.*/[^/]*\.md`, which requires at least one directory and so does not match `README.md` at the repo root. The documenter's `writes:` list papers over that by also listing `*.md`; a `doc_policy` rule written by an operator will not.
 
-This task lands before any profile code because every gate written later depends on `repo_relative`, `changed_files`, and `read_text`.
+This task lands before any profile code because every gate written later depends on `repo_relative`, `claimed_files`, and `read_text`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -560,7 +560,7 @@ import pytest
 
 from adw_modules import gates
 from adw_modules.data_types import BuildOutput, DocPolicyRule, SSSFConfig
-from adw_modules.utils import changed_files, path_matches, repo_relative
+from adw_modules.utils import claimed_files, path_matches, repo_relative
 
 
 def _run(tmp_path, rules=()):
@@ -598,13 +598,13 @@ def test_repo_relative_strips_an_absolute_root():
     assert repo_relative("apps/a.cs", "/repo") == "apps/a.cs"
 
 
-def test_changed_files_normalises_every_entry(tmp_path):
+def test_claimed_files_normalises_every_entry(tmp_path):
     envelope = _envelope([str(tmp_path / "a.cs"), "./b.cs", "c\\d.cs"])
-    assert changed_files(envelope, _run(tmp_path)) == ["a.cs", "b.cs", "c/d.cs"]
+    assert claimed_files(envelope, _run(tmp_path)) == ["a.cs", "b.cs", "c/d.cs"]
 
 
-def test_changed_files_on_an_envelope_without_the_field_is_empty(tmp_path):
-    assert changed_files(SimpleNamespace(), _run(tmp_path)) == []
+def test_claimed_files_on_an_envelope_without_the_field_is_empty(tmp_path):
+    assert claimed_files(SimpleNamespace(), _run(tmp_path)) == []
 
 
 # ── the gate ─────────────────────────────────────────────────────────────────
@@ -760,9 +760,14 @@ def repo_relative(path: str, repo_root: str) -> str:
     return text[2:] if text.startswith("./") else text
 
 
-def changed_files(envelope, run) -> list[str]:
-    """Every path an envelope claims to have changed, repo-relative."""
-    return [repo_relative(f, getattr(run, "repo_root", ""))
+def claimed_files(envelope, run) -> list[str]:
+    """Every path an envelope CLAIMS to have changed, repo-relative.
+
+    Named for its epistemics, and deliberately not `changed_files` — that name
+    belongs to git_helper, which reports what git OBSERVED. A gate that mixes
+    the two up is checking the agent's homework against its own answer sheet.
+    """
+    return [repo_relative(f, run.repo_root)
             for f in getattr(envelope, "changed_files", [])]
 
 
@@ -815,7 +820,7 @@ class SSSFConfig(BaseModel):
 
 - [ ] **Step 6: Write the gate**
 
-In `gates.py`, add `from .utils import changed_files, path_matches` to the imports and append:
+In `gates.py`, add `from .utils import claimed_files, path_matches` to the imports and append:
 
 ```python
 def doc_policy(envelope: EnvelopeBase, run) -> GateReport:
@@ -829,7 +834,7 @@ def doc_policy(envelope: EnvelopeBase, run) -> GateReport:
     would bury the one violation that matters under a hundred green lines.
     """
     report = GateReport()
-    changed = changed_files(envelope, run)
+    changed = claimed_files(envelope, run)
     for rule in getattr(run.cfg, "doc_policy", []) or []:
         triggers = [f for f in changed if path_matches(f, rule.when)]
         if not triggers:
@@ -3538,7 +3543,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from .data_types import EnvelopeBase, GateReport
-from .utils import changed_files
+from .utils import claimed_files
 
 # EF Core's own file convention, and the only thing this gate knows.
 MIGRATIONS_DIR = "Migrations"
@@ -3561,7 +3566,7 @@ def ef_migration_triad(envelope: EnvelopeBase, run) -> GateReport:
     leaves the snapshot alone is wrong however old the migration is.
     """
     report = GateReport()
-    changed = changed_files(envelope, run)
+    changed = claimed_files(envelope, run)
     for path in changed:
         parts = path.split("/")
         name = parts[-1]
@@ -3811,7 +3816,7 @@ import re
 from pathlib import Path
 
 from .data_types import EnvelopeBase, GateReport
-from .utils import changed_files, read_text
+from .utils import claimed_files, read_text
 
 # Files worth scanning for references. A README that mentions a variable is
 # documentation, not a dependency on it.
@@ -3848,7 +3853,7 @@ def env_example_sync(pairs: list[tuple[str, str]], prefixes: list[str]):
 
     def gate(envelope: EnvelopeBase, run) -> GateReport:
         report = GateReport()
-        changed = changed_files(envelope, run)
+        changed = claimed_files(envelope, run)
         for directory, example in pairs:
             sources = _sources(changed, directory)
             if not sources:
@@ -3882,7 +3887,7 @@ def sveltekit_csp(pairs: list[tuple[str, str]]):
     """
     def gate(envelope: EnvelopeBase, run) -> GateReport:
         report = GateReport()
-        changed = changed_files(envelope, run)
+        changed = claimed_files(envelope, run)
         for directory, policy_file in pairs:
             sources = _sources(changed, directory, exclude=policy_file)
             if not sources:
