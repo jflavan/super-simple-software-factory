@@ -87,3 +87,39 @@ def allowed_tools(tools: list[str] | None) -> list[str] | None:
             f"pi extension tools (subagent_*) have no counterpart — remove them "
             f"from this agent, or run it on coding_agent: pi.")
     return mapped
+
+
+PROVIDERS = {"anthropic"}
+
+# Claude Code resolves model ids server-side, so there is no catalog to probe
+# the way pi's --list-models provides one. These are the ceilings SSSF reports
+# for context occupancy; an unlisted id gets a conservative floor rather than
+# a guess that would overstate headroom.
+CONTEXT_WINDOWS = {
+    "claude-opus-5": 1_000_000,
+    "claude-sonnet-5": 1_000_000,
+    "claude-haiku-4-5-20251001": 200_000,
+}
+DEFAULT_CONTEXT_WINDOW = 200_000
+
+
+def resolve_model(pattern: str) -> tuple[str, str]:
+    """Resolve a config model pattern to an explicit (provider, model_id) pair.
+
+    Same contract as agent_pi.resolve_model, minus the catalog lookup: the
+    shape is validated, the provider is checked, and the bare id goes to
+    --model.
+    """
+    if "/" not in pattern:
+        raise ValueError(f"model {pattern!r} must be written provider/model-id, "
+                         f"e.g. anthropic/claude-opus-5")
+    provider, model_id = pattern.split("/", 1)
+    if provider not in PROVIDERS:
+        raise ValueError(f"provider {provider!r} is not served by coding_agent "
+                         f"claude_code — expected one of {', '.join(sorted(PROVIDERS))}")
+    return provider, model_id
+
+
+def context_window(provider: str, model_id: str) -> int:
+    """The model's context ceiling. 0 is never returned; unknown ids get a floor."""
+    return CONTEXT_WINDOWS.get(model_id, DEFAULT_CONTEXT_WINDOW)

@@ -70,3 +70,25 @@ def test_none_means_every_tool():
 def test_a_pi_extension_tool_is_rejected_by_name():
     with pytest.raises(ValueError, match="subagent_create"):
         agent_cc.allowed_tools(["read", "subagent_create"])
+
+
+def test_resolve_model_splits_provider_and_id():
+    assert agent_cc.resolve_model("anthropic/claude-opus-5") == ("anthropic", "claude-opus-5")
+
+
+def test_a_bare_pattern_is_rejected():
+    with pytest.raises(ValueError, match="provider/model-id"):
+        agent_cc.resolve_model("claude-opus-5")
+
+
+def test_a_foreign_provider_is_rejected():
+    with pytest.raises(ValueError, match="not served by"):
+        agent_cc.resolve_model("openai/gpt-5.6-terra")
+
+
+def test_context_window_is_known_for_a_listed_model():
+    assert agent_cc.context_window("anthropic", "claude-opus-5") == 1_000_000
+
+
+def test_context_window_falls_back_for_an_unlisted_model():
+    assert agent_cc.context_window("anthropic", "claude-future-9") == 200_000
