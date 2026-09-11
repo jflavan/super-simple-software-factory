@@ -273,7 +273,10 @@ class CcToolCallTracker:
 
     def observe(self, event: dict) -> list[dict]:
         etype = event.get("type", "")
-        content = (event.get("message") or {}).get("content") or []
+        message = event.get("message")
+        if not isinstance(message, dict):
+            return []
+        content = message.get("content") or []
         if not isinstance(content, list):
             return []
         if etype == "assistant":
@@ -297,6 +300,8 @@ class CcToolCallTracker:
         """
         if not call_id:
             return
+        if not isinstance(args, dict):
+            args = {}
         known = self._open.get(str(call_id), {})
         self._open[str(call_id)] = {
             "tool": tool or known.get("tool", ""),

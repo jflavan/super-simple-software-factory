@@ -128,3 +128,30 @@ def test_cc_tracker_keeps_the_first_sighting_of_a_call(monkeypatch):
     ]}})
 
     assert tracker._open["t"]["started_at"] == first_seen
+
+
+def test_cc_tracker_survives_a_message_that_is_not_a_dict():
+    """A malformed event must not kill the run.
+
+    observe() is called from agents._event_forwarder inside the stream loop,
+    with no try/except on the path — so an exception here terminates the agent
+    run rather than degrading its trace.
+    """
+    tracker = agent_cc.CcToolCallTracker()
+
+    assert tracker.observe({"type": "assistant", "message": "not a dict"}) == []
+
+
+def test_cc_tracker_survives_a_tool_use_whose_input_is_not_a_dict():
+    tracker = agent_cc.CcToolCallTracker()
+
+    tracker.observe({"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "id": "t", "name": "Bash", "input": "not a dict"},
+    ]}})
+    closed = tracker.observe({"type": "user", "message": {"content": [
+        {"type": "tool_result", "tool_use_id": "t", "content": "done"},
+    ]}})
+
+    assert len(closed) == 1
+    assert closed[0]["args"] == {}
+    assert closed[0]["tool"] == "Bash"
