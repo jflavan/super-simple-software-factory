@@ -131,11 +131,11 @@ def test_cc_tracker_keeps_the_first_sighting_of_a_call(monkeypatch):
 
 
 def test_cc_tracker_survives_a_message_that_is_not_a_dict():
-    """A malformed event must not kill the run.
+    """A malformed event must not produce a record or raise.
 
-    observe() is called from agents._event_forwarder inside the stream loop,
-    with no try/except on the path — so an exception here terminates the agent
-    run rather than degrading its trace.
+    agents._event_forwarder now also guards this call, so an exception here
+    would be caught rather than killing the run — but defending in the tracker
+    keeps a bad event from costing a trace row it did not need to cost.
     """
     tracker = agent_cc.CcToolCallTracker()
 
