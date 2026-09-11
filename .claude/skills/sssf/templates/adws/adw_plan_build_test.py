@@ -46,7 +46,8 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
     with run.phase(PhaseParams(name="build", kind="agent", owner="builder",
                                description="Implement the plan exactly")) as ph:
         previous = ph.call(AgentCall(output_type=BuildOutput, prompt=prompt, previous=plan,
-                                     gates=[gates.artifacts_exist]))
+                                     gates=[gates.artifacts_exist, gates.doc_policy,
+                                            *gates.profile_gates()]))
 
     test = None
     for i in range(1, MAX_FIX_LOOPS + 1):
@@ -64,7 +65,8 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
                                                "verbatim output")) as ph:
             previous = ph.call(AgentCall(output_type=BuildOutput, prompt=prompt,
                                          previous=quality.as_envelope(test, "fast checks"),
-                                         gates=[gates.artifacts_exist]))
+                                         gates=[gates.artifacts_exist, gates.doc_policy,
+                                                *gates.profile_gates()]))
 
     # Only tested work gets committed — a red suite leaves the tree uncommitted.
     if test is not None and test.passed:

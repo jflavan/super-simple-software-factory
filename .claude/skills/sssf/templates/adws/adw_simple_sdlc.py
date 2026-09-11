@@ -91,7 +91,8 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
     with run.phase(PhaseParams(name="build", kind="agent", owner="builder",
                                description="Implement the plan exactly")) as ph:
         build = ph.call(AgentCall(output_type=BuildOutput, prompt=prompt, previous=plan,
-                                  gates=[gates.diff_matches_claims]))
+                                  gates=[gates.diff_matches_claims, gates.doc_policy,
+                                         *gates.profile_gates()]))
 
     test = None
     for i in range(1, MAX_FIX_LOOPS + 1):
@@ -109,7 +110,8 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
                                                "verbatim output")) as ph:
             build = ph.call(AgentCall(output_type=BuildOutput, prompt=prompt,
                                       previous=quality.as_envelope(test, "fast checks"),
-                                      gates=[gates.diff_matches_claims]))
+                                      gates=[gates.diff_matches_claims, gates.doc_policy,
+                                             *gates.profile_gates()]))
 
     review = None
     revised = False
@@ -125,7 +127,8 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
         with run.phase(PhaseParams(name=f"revise_{i}", kind="agent", owner="builder", retries=1,
                                    description="Close the reviewer's blocking findings")) as ph:
             build = ph.call(AgentCall(output_type=BuildOutput, prompt=prompt, previous=review,
-                                      gates=[gates.diff_matches_claims]))
+                                      gates=[gates.diff_matches_claims, gates.doc_policy,
+                                             *gates.profile_gates()]))
             revised = True
 
     # A revision edited code after the suite last ran, so the green light is
