@@ -74,7 +74,7 @@ def _run(spec: QualityCheckSpec, run) -> QualityCheckResult:
     try:
         completed = subprocess.run(
             resolve_argv(spec.argv),
-            cwd=run.repo_root,
+            cwd=Path(run.repo_root) / spec.cwd,
             env=env,
             capture_output=True,
             text=True,

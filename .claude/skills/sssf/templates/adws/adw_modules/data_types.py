@@ -132,6 +132,11 @@ class DocumentOutput(EnvelopeBase):
 
 QualityArea = Literal["frontend", "backend"]
 QualityOperation = Literal["lint", "typecheck", "build"]
+# Which pass a block belongs to. `fast` runs inside bounded fix loops, where a
+# slow block would multiply its cost by the retry count; `full` adds the blocks
+# that need a service to be up (a Testcontainers suite needs Docker) and runs
+# only in final verification.
+QualityTier = Literal["fast", "full"]
 
 
 class QualityCheckSpec(BaseModel):
@@ -142,6 +147,12 @@ class QualityCheckSpec(BaseModel):
     operation: QualityOperation
     argv: list[str]
     timeout_seconds: int = 120
+    tier: QualityTier = "fast"
+    # Where the command runs, relative to the repo root. A monorepo runs the
+    # same command in several packages, and every package manager spells its
+    # "somewhere else" flag differently (npm --prefix, pnpm --dir, yarn --cwd,
+    # bun not at all). A working directory is what all of them mean.
+    cwd: str = "."
 
 
 class QualityCheckResult(BaseModel):
