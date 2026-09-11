@@ -23,6 +23,13 @@ from .frameworks import get as get_framework
 
 BLOCKS_RELATIVE = "adws/adw_modules/quality_blocks.py"
 GATES_RELATIVE = "adws/adw_modules/profile_gates.py"
+OVERLAY_RELATIVE = "adws/adw_data/prompt_engineering/profile_overlay.md"
+PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
+
+NO_CONVENTIONS = (
+    "This repository has no convention files (no CLAUDE.md, AGENTS.md, or\n"
+    "instructions directory were found), so there is nothing extra to read.\n"
+    "Follow the patterns in the code you are editing.")
 
 
 class CompositeProfile:
@@ -130,6 +137,42 @@ class CompositeProfile:
             wirings += framework.gate_wiring(facts.of(framework.NAME))
         return wirings
 
+    def render_overlay(self, facts: ProfileFacts) -> str:
+        """One fragment per declared framework, plus what is true of this repo.
+
+        Convention files are LISTED, never inlined. Copying a repo's standards
+        into a prompt duplicates them and then drifts from them - and the live
+        file is the one the humans keep correct.
+        """
+        parts = ["## Stack notes", ""]
+        for framework in self.frameworks:
+            if not framework.OVERLAY:
+                continue
+            fragment = PROMPTS_DIR / framework.OVERLAY
+            if fragment.is_file():
+                parts += [fragment.read_text(encoding="utf-8").strip(), ""]
+
+        parts += ["### Commands", ""]
+        if facts.task_runner:
+            parts.append(
+                f"This repository drives its commands through `{facts.task_runner}`. "
+                f"Prefer a recipe over a raw command when one exists - "
+                f"`{facts.task_runner} --list` shows them.")
+        else:
+            parts.append("This repository has no task runner. Use each toolchain "
+                         "directly, as the generated quality blocks do.")
+
+        parts += ["", "### This repository's own standards", ""]
+        if facts.conventions:
+            parts.append("Read these before you change anything. They are the rules "
+                         "this team already agreed on, and they win over anything "
+                         "above:")
+            parts.append("")
+            parts += [f"- `{c}`" for c in facts.conventions]
+        else:
+            parts.append(NO_CONVENTIONS)
+        return "\n".join(parts) + "\n"
+
     def generate(self, facts: ProfileFacts, root, write: bool = True) -> GenerationReport:
         """Facts in, files out. `write=False` is the --doctor dry run.
 
@@ -155,6 +198,7 @@ class CompositeProfile:
         blocks_text = emit.render_blocks_module(
             facts, blocks, summary=[f"  {line}" for line in self.describe(facts)])
         gates_text = emit.render_gates_module(facts, wirings)
+        overlay_text = self.render_overlay(facts)
         written: list[str] = []
         if write:
             # Gates BEFORE blocks. See the docstring: blocks are the marker
@@ -163,5 +207,10 @@ class CompositeProfile:
             # not the quieter one.
             emit.write_file(root, GATES_RELATIVE, gates_text, written)
             emit.write_file(root, BLOCKS_RELATIVE, blocks_text, written)
+            # Last, because unlike the other two the overlay is not load-bearing
+            # for either loader above - it is read through a prompt variable
+            # (agents.profile_overlay), not imported, so nothing downstream
+            # treats its absence as a signal.
+            emit.write_file(root, OVERLAY_RELATIVE, overlay_text, written)
         return GenerationReport(profile=self.NAME, files=written, blocks=blocks,
                                 gates=[w.name for w in wirings], unresolved=unresolved)

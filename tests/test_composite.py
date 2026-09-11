@@ -315,3 +315,22 @@ def test_a_dry_run_still_renders_the_gates_module_so_doctor_can_prove_it_imports
     profile.generate(profile.detect(repo), repo, write=False)
 
     assert calls == [1]
+
+
+def test_a_dry_run_still_renders_the_overlay_so_doctor_can_prove_it_too(
+        tmp_path, monkeypatch):
+    """Mirrors the two render tests above. The overlay is not load-bearing for
+    either loader, but --doctor promising a dry run and then skipping one of
+    the three renders would be a silent gap the other two tests can't catch."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    dotnet_svelte_repo(repo)
+    profile = _profile(tmp_path)
+    calls = []
+    real = CompositeProfile.render_overlay
+    monkeypatch.setattr(CompositeProfile, "render_overlay",
+                        lambda self, *a, **k: calls.append(1) or real(self, *a, **k))
+
+    profile.generate(profile.detect(repo), repo, write=False)
+
+    assert calls == [1]
