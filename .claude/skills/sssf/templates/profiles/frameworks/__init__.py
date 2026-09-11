@@ -8,7 +8,8 @@ ADDING A FRAMEWORK
 2. If it brings gates, write `gates/<GATE_MODULE>.py`. It is STAMPED into a
    target repo's adw_modules/, so its imports are relative.
 3. If it has prompt guidance, write `prompts/<OVERLAY>`.
-4. Add it to FRAMEWORKS below.
+4. Import it at the top of this file AND add it to FRAMEWORKS below - both,
+   or you get a NameError naming a framework that is right there in the tuple.
 5. Create `<profile_dir>/profile.yaml` naming it alongside whatever it pairs
    with. No core module changes, and no other framework changes.
 
@@ -45,10 +46,26 @@ def verify(module) -> None:
             f"{', '.join(missing)} - see FRAMEWORK_INTERFACE")
 
 
+def verify_unique_names(registered) -> None:
+    """A duplicated NAME makes the second registration unreachable via get().
+
+    `verify()` above checks each framework in isolation and would pass twice
+    over for two frameworks sharing a NAME - one copied from the other with
+    the rename forgotten. This checks the registry as a whole.
+    """
+    names = [framework.NAME for framework in registered]
+    if len(set(names)) != len(names):
+        raise ImportError(
+            f"two frameworks registered under one NAME: {sorted(names)} - "
+            f"get() resolves to whichever comes first, so the second is unreachable")
+
+
 FRAMEWORKS: tuple[ModuleType, ...] = (dotnet, sveltekit)
 
 for _framework in FRAMEWORKS:
     verify(_framework)
+
+verify_unique_names(FRAMEWORKS)
 
 
 def names() -> list[str]:
