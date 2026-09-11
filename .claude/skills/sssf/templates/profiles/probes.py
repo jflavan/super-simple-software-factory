@@ -144,7 +144,7 @@ def node_packages(root: Path, marker: str,
         found.append(Frontend(
             directory=relative(root, directory),
             package_manager=package_manager(root, directory),
-            scripts=sorted((package.get("scripts") or {}).keys()),
+            scripts=package.get("scripts") or {},
             env_example=relative(root, example) if example else "",
         ))
     return found

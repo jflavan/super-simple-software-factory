@@ -21,6 +21,22 @@ from .facts import Frontend, GateWiring, ProfileFacts, QualityArea, QualityBlock
 # (package.json script, candidate recipe names, quality operation, block prefix)
 FrontendScript = tuple[str, list[str], str, str]
 
+# Commands that need a browser or a built app. Bound into a bounded fix loop
+# they multiply their cost by the retry count, which is the same reason a
+# Testcontainers suite is tagged `full`.
+SLOW_MARKERS = ("playwright", "cypress", "webdriver", " e2e", "e2e ")
+
+
+def _tier(frontend: Frontend, script: str) -> str:
+    """`full` for a command that needs a browser or a built app, else `fast`.
+
+    Keyed off the COMMAND, not the script name: a team can call anything
+    `test`, but `playwright test` and `vitest run` are not the same cost to
+    run inside a bounded fix loop.
+    """
+    command = frontend.scripts.get(script, "")
+    return "full" if any(marker in command.lower() for marker in SLOW_MARKERS) else "fast"
+
 BLOCKS_HEADER = '''"""GENERATED - do not expect edits here to survive a re-install.
 
 Written by `install.py --profile {profile}` at {stamp}.
@@ -119,12 +135,34 @@ def script_blocks(frontends: list[Frontend], repo: ProfileFacts,
     blocks: list[QualityBlock] = []
     unresolved: list[str] = []
     label_of = labels([f.directory for f in frontends])
+    emitted_for: dict[str, int] = {f.directory: 0 for f in frontends}
 
-    for frontend in frontends:
-        emitted = 0
-        for script, candidates, operation, prefix in scripts:
-            if not frontend.has(script):
-                continue
+    for script, candidates, operation, prefix in scripts:
+        declaring = [f for f in frontends if f.has(script)]
+        if not declaring:
+            continue
+
+        # Candidates with no `{name}` placeholder are repo-wide by
+        # construction - a team names a package-specific recipe `test-web`
+        # and a repo-wide one `test-frontend`, never the reverse.
+        shared = [c for c in candidates if "{name}" not in c]
+        argv, source = recipe(repo, shared)
+        if argv and len(declaring) > 1:
+            # One repo-wide recipe covers every package that declares this
+            # script. Emitting it per package would run the same command N
+            # times, into N artifact directories holding one command's output.
+            blocks.append(QualityBlock(
+                name=f"{prefix}-frontend", area=area, operation=operation,
+                argv=argv, cwd=".", tier=(
+                    "full" if any(_tier(f, script) == "full" for f in declaring)
+                    else "fast"),
+                timeout_seconds=600,
+                source=f"{source} (covers {len(declaring)} package(s))"))
+            for frontend in declaring:
+                emitted_for[frontend.directory] += 1
+            continue
+
+        for frontend in declaring:
             # The collision-aware label, NOT the bare directory name. Two
             # packages both called `web` would otherwise resolve the same
             # `check-{name}` recipe and emit two differently-named blocks
@@ -139,10 +177,12 @@ def script_blocks(frontends: list[Frontend], repo: ProfileFacts,
                 # task runner resolves its own paths from. A raw package-manager
                 # command runs inside the package it belongs to.
                 cwd="." if argv else frontend.directory,
-                tier="fast", timeout_seconds=600,
+                tier=_tier(frontend, script), timeout_seconds=600,
                 source=source or f"{frontend.package_manager} script {script!r}"))
-            emitted += 1
-        if not emitted:
+            emitted_for[frontend.directory] += 1
+
+    for frontend in frontends:
+        if not emitted_for[frontend.directory]:
             unresolved.append(
                 f"package {frontend.directory} declares none of "
                 f"{', '.join(s for s, *_ in scripts)} - nothing verifies it")

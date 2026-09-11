@@ -68,7 +68,7 @@ def test_a_transform_collision_that_survives_flattening_gets_an_index():
 
 def test_a_script_becomes_a_block_in_its_own_directory():
     frontends = [Frontend(directory="apps/web", package_manager="npm",
-                          scripts=["check", "build"])]
+                          scripts={"check": "svelte-check", "build": "vite build"})]
     blocks, unresolved = emit.script_blocks(frontends, _repo(), SCRIPTS)
     by_name = {b.name: b for b in blocks}
 
@@ -81,29 +81,30 @@ def test_a_script_becomes_a_block_in_its_own_directory():
 
 
 def test_the_package_manager_is_honoured():
-    frontends = [Frontend(directory="web", package_manager="pnpm", scripts=["build"])]
+    frontends = [Frontend(directory="web", package_manager="pnpm",
+                          scripts={"build": "vite build"})]
     blocks, _ = emit.script_blocks(frontends, _repo(), SCRIPTS)
     assert blocks[0].argv == ["pnpm", "run", "build"]
 
 
 def test_a_recipe_beats_the_package_manager_and_runs_from_the_root():
     repo = _repo(task_runner="just", recipes=["check-web"])
-    frontends = [Frontend(directory="apps/web", scripts=["check"])]
+    frontends = [Frontend(directory="apps/web", scripts={"check": "svelte-check"})]
     block = emit.script_blocks(frontends, repo, SCRIPTS)[0][0]
     assert block.argv == ["just", "check-web"]
     assert block.cwd == "."
 
 
 def test_a_package_declaring_none_of_the_scripts_is_reported_unresolved():
-    frontends = [Frontend(directory="apps/web", scripts=["dev"])]
+    frontends = [Frontend(directory="apps/web", scripts={"dev": "vite dev"})]
     blocks, unresolved = emit.script_blocks(frontends, _repo(), SCRIPTS)
     assert blocks == []
     assert "apps/web" in unresolved[0]
 
 
 def test_colliding_package_names_produce_unique_block_names():
-    frontends = [Frontend(directory="apps/web", scripts=["build"]),
-                 Frontend(directory="packages/web", scripts=["build"])]
+    frontends = [Frontend(directory="apps/web", scripts={"build": "vite build"}),
+                 Frontend(directory="packages/web", scripts={"build": "vite build"})]
     names = [b.name for b in emit.script_blocks(frontends, _repo(), SCRIPTS)[0]]
     assert sorted(names) == ["build-apps-web", "build-packages-web"]
 
@@ -123,8 +124,8 @@ def test_colliding_packages_do_not_share_one_recipe():
     argv alone.
     """
     repo = _repo(task_runner="just", recipes=["build-web"])
-    frontends = [Frontend(directory="apps/web", scripts=["build"]),
-                 Frontend(directory="packages/web", scripts=["build"])]
+    frontends = [Frontend(directory="apps/web", scripts={"build": "vite build"}),
+                 Frontend(directory="packages/web", scripts={"build": "vite build"})]
 
     blocks, _ = emit.script_blocks(frontends, repo, SCRIPTS)
 
@@ -135,9 +136,69 @@ def test_colliding_packages_do_not_share_one_recipe():
 
 
 def test_the_area_default_can_be_overridden_for_a_non_frontend_package():
-    frontends = [Frontend(directory="apps/api", scripts=["build"])]
+    frontends = [Frontend(directory="apps/api", scripts={"build": "vite build"})]
     blocks, _ = emit.script_blocks(frontends, _repo(), SCRIPTS, area="backend")
     assert blocks[0].area == "backend"
+
+
+# ── a broad recipe covers every frontend at once ────────────────────────────
+
+def test_a_repo_wide_recipe_covering_several_packages_emits_one_block():
+    """`check-frontend` names no package - it is "every package", by construction.
+
+    Emitting it once per declaring package would run the same command twice,
+    into two artifact directories holding one command's output.
+    """
+    repo = _repo(task_runner="just", recipes=["check-frontend"])
+    frontends = [Frontend(directory="apps/web", scripts={"check": "svelte-check"}),
+                 Frontend(directory="apps/admin", scripts={"check": "svelte-check"})]
+
+    blocks, unresolved = emit.script_blocks(frontends, repo, SCRIPTS)
+
+    assert [b.name for b in blocks] == ["check-frontend"]
+    assert blocks[0].argv == ["just", "check-frontend"]
+    assert blocks[0].cwd == "."
+    assert "covers 2 package(s)" in blocks[0].source
+    assert unresolved == []
+
+
+def test_a_single_frontend_still_gets_a_named_block_with_a_shared_recipe():
+    """A per-package command and a repo-wide recipe are equivalent for one
+    package - the specific name is more useful, so it wins."""
+    repo = _repo(task_runner="just", recipes=["check-frontend"])
+    frontends = [Frontend(directory="apps/web", scripts={"check": "svelte-check"})]
+
+    blocks, _ = emit.script_blocks(frontends, repo, SCRIPTS)
+
+    assert blocks[0].name == "check-web"
+    assert blocks[0].argv == ["just", "check-frontend"]
+
+
+def test_a_repo_wide_recipe_does_not_swallow_a_package_declaring_nothing():
+    """The 'declares none of the scripts' note must still fire after the
+    restructure that lets a shared recipe cover several packages at once."""
+    repo = _repo(task_runner="just", recipes=["check-frontend"])
+    frontends = [Frontend(directory="apps/web", scripts={"check": "svelte-check"}),
+                 Frontend(directory="apps/silent", scripts={"dev": "vite dev"})]
+
+    blocks, unresolved = emit.script_blocks(frontends, repo, SCRIPTS)
+
+    assert [b.name for b in blocks] == ["check-web"]
+    assert "apps/silent" in unresolved[0]
+
+
+# ── tier follows the command, not the script name ───────────────────────────
+
+def test_a_slow_command_is_tagged_the_full_tier():
+    frontends = [Frontend(directory="apps/web", scripts={"test": "playwright test"})]
+    blocks, _ = emit.script_blocks(frontends, _repo(), SCRIPTS)
+    assert blocks[0].tier == "full"
+
+
+def test_a_fast_command_stays_in_the_fast_tier():
+    frontends = [Frontend(directory="apps/web", scripts={"test": "vitest run"})]
+    blocks, _ = emit.script_blocks(frontends, _repo(), SCRIPTS)
+    assert blocks[0].tier == "fast"
 
 
 # ── rendering ────────────────────────────────────────────────────────────────

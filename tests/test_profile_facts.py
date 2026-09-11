@@ -60,7 +60,8 @@ def test_profile_facts_requires_its_identity():
 
 def test_a_frontend_knows_which_scripts_it_has():
     frontend = Frontend(directory="apps/web", package_manager="npm",
-                        scripts=["check", "test", "build"])
+                        scripts={"check": "svelte-check", "test": "vitest run",
+                                 "build": "vite build"})
     assert frontend.has("check")
     assert not frontend.has("lint")
 

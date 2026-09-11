@@ -45,7 +45,11 @@ class Frontend(BaseModel):
 
     directory: str                  # repo-relative, forward slashes; "." for the root
     package_manager: str = "npm"    # npm | pnpm | yarn | bun, from the lockfile
-    scripts: list[str] = Field(default_factory=list)   # keys of package.json "scripts"
+    # package.json "scripts": name -> command. The command is kept, not just the
+    # name, because a tier heuristic needs it - a `test` that runs `playwright
+    # test` needs a browser and a build, and must not land in a bounded fix
+    # loop the way `vitest run` can.
+    scripts: dict[str, str] = Field(default_factory=dict)
     env_example: str = ""           # the .env.example that governs it, if one exists
 
     def has(self, script: str) -> bool:

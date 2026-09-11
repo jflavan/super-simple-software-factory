@@ -26,9 +26,17 @@ MARKER = "@sveltejs/kit"
 # Build-tool conventions, not repository conventions.
 ENV_PREFIXES = ["PUBLIC_", "VITE_"]
 
-# SvelteKit's server hook, and the words that mean it declares a policy.
-HOOKS_RELATIVE = "src/hooks.server.ts"
-CSP_MARKERS = ("csp", "content-security-policy")
+# Where a SvelteKit app declares a Content-Security-Policy, in the order the
+# framework documents them: `kit.csp.directives` in the config is the blessed
+# route, and a hand-written header in the server hook is the alternative.
+# Several spellings each, because a JavaScript project is not a TypeScript one.
+CSP_FILES = ("svelte.config.js", "svelte.config.ts",
+             "src/hooks.server.ts", "src/hooks.server.js", "src/hooks.server.mjs")
+
+# Tighter than a bare "csp": a `cspNonce` variable or a `// TODO: csp` would
+# otherwise wire a gate against a file holding no directives at all, and the
+# gate would then demand an edit to the wrong file for every external URL.
+CSP_MARKERS = ("csp:", "content-security-policy", "contentsecuritypolicy")
 
 # (package.json script, candidate recipe names, quality operation, block prefix)
 SCRIPTS = [
@@ -41,11 +49,13 @@ SCRIPTS = [
 
 class SvelteKitFacts(FrameworkFacts):
     frontends: list[Frontend] = Field(default_factory=list)
-    # Manifests that did not parse. probes.node_packages skips them, which makes
-    # them invisible to matches() too - so a repo whose only SvelteKit
-    # package.json has a trailing comma is told "no profile matches", for a
-    # reason the installer knew and did not print. Collected here, reported by
-    # blocks() as unresolved.
+    # Manifests anywhere in the repo that did not parse as JSON. Not
+    # attributable to a framework - a manifest that fails to parse never
+    # revealed which framework it belonged to - so this is "what detection
+    # could not read", reported so a package does not vanish silently.
+    # It does NOT rescue a repo whose only manifest is broken: matches() runs
+    # before blocks(), so such a repo is reported as "no profile matches"
+    # instead. install.py handles that case on the no-match path.
     unreadable: list[str] = Field(default_factory=list)
     # frontend directory -> the file declaring its content-security policy.
     # Lives here rather than on Frontend because only SvelteKit has the
@@ -55,16 +65,22 @@ class SvelteKitFacts(FrameworkFacts):
 
 
 def _csp_file(root: Path, frontend: Frontend) -> str:
-    """The server hook, but only when it actually declares a CSP.
+    """Where this app's CSP is declared, if it declares one at all.
 
-    Opt-in on purpose: the csp gate fires on external origins, and pointing it
-    at a repo that has no policy would be noise on every single run.
+    Tried in the order SvelteKit documents them: `svelte.config.js`'s
+    `kit.csp.directives` is the config-file route the framework describes, so
+    it is tried before the hand-written server-hook alternative. Opt-in on
+    purpose: the csp gate fires on external origins, and pointing it at a
+    repo that has no policy would be noise on every single run.
     """
-    hooks = root / frontend.directory / HOOKS_RELATIVE
-    if not hooks.is_file():
-        return ""
-    text = hooks.read_text(errors="replace").lower()
-    return probes.relative(root, hooks) if any(m in text for m in CSP_MARKERS) else ""
+    for candidate in CSP_FILES:
+        path = root / frontend.directory / candidate
+        if not path.is_file():
+            continue
+        text = path.read_text(errors="replace").lower()
+        if any(m in text for m in CSP_MARKERS):
+            return probes.relative(root, path)
+    return ""
 
 
 def matches(root) -> bool:
@@ -83,8 +99,12 @@ def detect(root) -> SvelteKitFacts:
 def blocks(facts: SvelteKitFacts,
            repo: ProfileFacts) -> tuple[list[QualityBlock], list[str]]:
     emitted, unresolved = emit.script_blocks(facts.frontends, repo, SCRIPTS)
+    unresolved += [f"frontend {f.directory} has no .env.example - the public "
+                   f"variable gate is not wired for it"
+                   for f in facts.frontends if not f.env_example]
     unresolved += [f"{path} does not parse as JSON - the package it declares is "
-                   f"invisible to detection" for path in facts.unreadable]
+                   f"invisible to detection - fix the JSON and re-run "
+                   f"install.py --profile" for path in facts.unreadable]
     return emitted, unresolved
 
 
@@ -98,7 +118,7 @@ def describe(facts: SvelteKitFacts) -> list[str]:
     lines = []
     for frontend in facts.frontends:
         lines.append(f"frontend: {frontend.directory}  [{frontend.package_manager}] "
-                     f"scripts: {', '.join(frontend.scripts) or 'none'}")
+                     f"scripts: {', '.join(sorted(frontend.scripts)) or 'none'}")
         if frontend.env_example:
             lines.append(f"  env example: {frontend.env_example}")
         if facts.csp_files.get(frontend.directory):

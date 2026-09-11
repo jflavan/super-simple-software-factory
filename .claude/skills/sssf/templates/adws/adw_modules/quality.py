@@ -186,7 +186,13 @@ def blocks() -> list[QualityCheckSpec]:
     generated = _import_generated_blocks()
     resolved = generated if generated is not None else list(PLACEHOLDER_BLOCKS)
     names = [block.name for block in resolved]
-    duplicates = sorted({name for name in names if names.count(name) > 1})
+    # Case-folded: a block's name IS its artifact directory (`_check_dir`),
+    # and Windows and default macOS filesystems are case-insensitive, so
+    # `test-Web` and `test-web` collide on disk - two directories become one,
+    # overwriting each other's command.log - even though the strings differ.
+    lowered = [name.lower() for name in names]
+    duplicates = sorted({name for name, low in zip(names, lowered)
+                         if lowered.count(low) > 1})
     if duplicates:
         raise ValueError(f"duplicate quality block name(s): {duplicates}. "
                          f"A block's name is its artifact directory.")

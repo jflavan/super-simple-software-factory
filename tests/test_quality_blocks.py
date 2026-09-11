@@ -309,6 +309,18 @@ def test_duplicate_block_names_are_refused(monkeypatch):
         quality.blocks()
 
 
+def test_duplicate_block_names_are_refused_case_insensitively(monkeypatch):
+    """A block's name is its artifact directory, and Windows and default macOS
+    filesystems are case-insensitive - `test-Web` and `test-web` collide on
+    disk even though the strings differ."""
+    monkeypatch.setattr(quality, "_import_generated_blocks", lambda: [
+        QualityCheckSpec(name="test-Web", area="backend", operation="test", argv=["a"]),
+        QualityCheckSpec(name="test-web", area="frontend", operation="test", argv=["b"]),
+    ])
+    with pytest.raises(ValueError, match="duplicate quality block name"):
+        quality.blocks()
+
+
 def test_an_empty_block_list_refuses_to_report_green(tmp_path, monkeypatch):
     """Zero commands is not success. It is the failure this design removes."""
     monkeypatch.setattr(quality, "_import_generated_blocks", lambda: [])
