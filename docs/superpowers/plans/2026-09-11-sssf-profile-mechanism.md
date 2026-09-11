@@ -971,11 +971,6 @@ def test_a_frontend_knows_which_scripts_it_has():
                         scripts=["check", "test", "build"])
     assert frontend.has("check")
     assert not frontend.has("lint")
-    assert frontend.label == "web"
-
-
-def test_a_frontend_at_the_repo_root_still_has_a_label():
-    assert Frontend(directory=".", package_manager="npm").label == "root"
 
 
 def test_a_quality_block_defaults_to_fast_at_the_repo_root():
@@ -1074,27 +1069,21 @@ class Frontend(BaseModel):
     """One JavaScript package: where it is, how to run it, what it can do.
 
     Shared by every framework that lives in a package.json — SvelteKit today,
-    Angular or React tomorrow. The framework-specific slots at the bottom are
-    filled by whichever framework found this package, and left empty by the
-    ones that have no such concept.
+    Angular or React tomorrow.
+
+    Deliberately generic: this is exactly what `probes.node_packages` can learn
+    from a package.json and a lockfile, and nothing more. Anything only one
+    framework cares about belongs in that framework's own FrameworkFacts
+    subclass, not as an empty slot every other framework carries.
     """
 
     directory: str                  # repo-relative, forward slashes; "." for the root
     package_manager: str = "npm"    # npm | pnpm | yarn | bun, from the lockfile
     scripts: list[str] = Field(default_factory=list)   # keys of package.json "scripts"
     env_example: str = ""           # the .env.example that governs it, if one exists
-    csp_file: str = ""              # the file declaring its content-security policy,
-                                    # for frameworks that have one (SvelteKit:
-                                    # src/hooks.server.ts). Empty when there is none.
 
     def has(self, script: str) -> bool:
         return script in self.scripts
-
-    @property
-    def label(self) -> str:
-        """A short, stable name for this package — used in block names."""
-        name = PurePosixPath(self.directory).name
-        return name or "root"
 
 
 class ProfileFacts(BaseModel):
@@ -1825,6 +1814,24 @@ def test_colliding_package_names_produce_unique_block_names():
     assert sorted(names) == ["build-apps-web", "build-packages-web"]
 
 
+def test_colliding_packages_do_not_share_one_recipe(tmp_path):
+    """Unique names are not enough if both run the SAME command.
+
+    With a runner declaring `build-web`, a naive per-package label would
+    resolve it twice: two differently-named blocks, one identical argv, one
+    package actually checked. The duplicate-name guard cannot see it because
+    the names differ.
+    """
+    repo = _repo(task_runner="just", recipes=["build-web"])
+    frontends = [Frontend(directory="apps/web", scripts=["build"]),
+                 Frontend(directory="packages/web", scripts=["build"])]
+
+    blocks, _ = emit.script_blocks(frontends, repo, SCRIPTS)
+
+    assert len({tuple(b.argv) for b in blocks}) == 2
+    assert {b.cwd for b in blocks} == {"apps/web", "packages/web"}
+
+
 # ── rendering ────────────────────────────────────────────────────────────────
 
 def test_a_rendered_blocks_module_is_valid_python_that_builds_specs():
@@ -2000,7 +2007,12 @@ def script_blocks(frontends: list[Frontend], repo: ProfileFacts,
         for script, candidates, operation, prefix in scripts:
             if not frontend.has(script):
                 continue
-            argv, source = recipe(repo, candidates, name=frontend.label)
+            # The collision-aware label, NOT the bare directory name. Two
+            # packages both called `web` would otherwise resolve the same
+            # `check-{name}` recipe and emit two differently-named blocks
+            # running one identical command against one of them.
+            argv, source = recipe(repo, candidates,
+                                  name=label_of[frontend.directory])
             blocks.append(QualityBlock(
                 name=f"{prefix}-{label_of[frontend.directory]}",
                 area="frontend", operation=operation,
@@ -2530,10 +2542,10 @@ def test_a_hooks_file_is_recorded_only_when_it_mentions_csp(tmp_path):
           "// content-security-policy is set here\n")
     write(tmp_path, "apps/admin/src/hooks.server.ts", "export const handle = x;\n")
 
-    by_dir = {f.directory: f for f in sveltekit.detect(tmp_path).frontends}
+    facts = sveltekit.detect(tmp_path)
 
-    assert by_dir["apps/web"].csp_file == "apps/web/src/hooks.server.ts"
-    assert by_dir["apps/admin"].csp_file == ""
+    assert facts.csp_files == {"apps/web": "apps/web/src/hooks.server.ts"}
+    assert "apps/admin" not in facts.csp_files
 
 
 def test_scripts_become_blocks_through_the_shared_emitter(tmp_path):
@@ -2661,6 +2673,11 @@ SCRIPTS = [
 
 class SvelteKitFacts(FrameworkFacts):
     frontends: list[Frontend] = Field(default_factory=list)
+    # frontend directory -> the file declaring its content-security policy.
+    # Lives here rather than on Frontend because only SvelteKit has the
+    # concept: a shared type with one empty slot per framework is how "adding
+    # a framework touches no core module" stops being true.
+    csp_files: dict[str, str] = Field(default_factory=dict)
 
 
 def _csp_file(root: Path, frontend: Frontend) -> str:
@@ -2683,9 +2700,9 @@ def matches(root) -> bool:
 def detect(root) -> SvelteKitFacts:
     root = Path(root)
     frontends = probes.node_packages(root, MARKER)
-    for frontend in frontends:
-        frontend.csp_file = _csp_file(root, frontend)
-    return SvelteKitFacts(frontends=frontends)
+    csp_files = {f.directory: _csp_file(root, f) for f in frontends}
+    return SvelteKitFacts(frontends=frontends,
+                          csp_files={d: p for d, p in csp_files.items() if p})
 
 
 def blocks(facts: SvelteKitFacts,
@@ -2694,8 +2711,21 @@ def blocks(facts: SvelteKitFacts,
 
 
 def describe(facts: SvelteKitFacts) -> list[str]:
-    return [f"frontend: {f.directory}  [{f.package_manager}] "
-            f"scripts: {', '.join(f.scripts) or 'none'}" for f in facts.frontends]
+    """Name the files the gates key off, so --doctor can show them moving.
+
+    A relocated .env.example or hooks.server.ts silently unwires a gate, and
+    the gate list alone reports only a name. These lines are what make that
+    drift visible in a doctor run.
+    """
+    lines = []
+    for frontend in facts.frontends:
+        lines.append(f"frontend: {frontend.directory}  [{frontend.package_manager}] "
+                     f"scripts: {', '.join(frontend.scripts) or 'none'}")
+        if frontend.env_example:
+            lines.append(f"  env example: {frontend.env_example}")
+        if facts.csp_files.get(frontend.directory):
+            lines.append(f"  csp: {facts.csp_files[frontend.directory]}")
+    return lines
 
 
 def gate_wiring(facts: SvelteKitFacts) -> list[GateWiring]:
@@ -2712,7 +2742,7 @@ def gate_wiring(facts: SvelteKitFacts) -> list[GateWiring]:
             module=GATE_MODULE, name="env_example_sync",
             call=f"env_example_sync({env_pairs!r}, {ENV_PREFIXES!r})"))
 
-    csp_pairs = [(f.directory, f.csp_file) for f in facts.frontends if f.csp_file]
+    csp_pairs = sorted(facts.csp_files.items())
     if csp_pairs:
         wirings.append(GateWiring(
             module=GATE_MODULE, name="sveltekit_csp",
