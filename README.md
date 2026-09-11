@@ -199,7 +199,7 @@ The mechanism is composable on purpose, because whole-stack profiles multiply. A
 
 A framework module exposes eight names — `NAME`, `GATE_MODULE`, `OVERLAY`, `matches`, `detect`, `blocks`, `describe`, `gate_wiring` — and **never imports another framework**. Everything shared goes through `probes.py` (finding things) and `emit.py` (writing things).
 
-**Adding a stack is one YAML file** dropped in its own directory beside the others; `registry` globs `*/profile.yaml`, so there is nothing to register. Adding a *technology* is four things: the framework module, its gate module in `profiles/gates/`, its prompt fragment in `profiles/prompts/`, and two lines in `frameworks/__init__.py`. The acceptance test for this design adds a third framework in 64 lines and touches no shared file.
+**Adding a stack is one YAML file** dropped in its own directory beside the others; `registry` globs `*/profile.yaml`, so there is nothing to register. Adding a *technology* is four things: the framework module, its gate module in `profiles/gates/`, its prompt fragment in `profiles/prompts/`, and two lines in `frameworks/__init__.py`. The acceptance test for this design adds a third framework in a 64-line module (`tests/fake_framework.py`) without changing `probes.py`, `emit.py`, `composite.py`, `registry.py`, or `facts.py` — the registration tuple is the only shared line it touches, and that is the whole claim.
 
 A profiled install writes three files and stamps one more per framework:
 

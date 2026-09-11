@@ -196,8 +196,9 @@ check for before writing any Python.
 
 A **framework** owns one technology; a **profile** is a YAML file naming the
 frameworks a stack is made of. That split is why pairing .NET with a different
-frontend costs one new file, not a fork of the existing profile — Task 19 built
-a third framework end to end in 64 lines and changed no shared module.
+frontend costs one new file, not a fork of the existing profile — the acceptance
+test for the design builds a third framework end to end in a 64-line module and
+changes no shared module, only the two registration lines of step 4 below.
 
 To add one — Angular, React, Django, whatever:
 

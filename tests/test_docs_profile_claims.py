@@ -253,3 +253,19 @@ def test_the_quality_tool_call_payload_is_documented_with_its_real_keys():
     text = _text("references", "observability.md")
     for key in keys:
         assert key in text, f"observability.md never mentions the {key} key"
+
+
+def test_the_cost_of_a_third_framework_is_stated_accurately():
+    """README.md and install.md both quote a line count for the worked example.
+
+    It is the most concrete claim the profile design makes, which is exactly why
+    it rots: the number is in prose and the file is in the test suite.
+    """
+    lines = len((ROOT / "tests" / "fake_framework.py")
+                .read_text(encoding="utf-8").rstrip("\n").split("\n"))
+    for name, text in (("README.md", _readme()),
+                       ("install.md", _text("cookbooks", "install.md"))):
+        quoted = re.findall(r"(\d+)-line module", text)
+        assert quoted, f"{name} no longer quotes a line count"
+        assert all(int(n) == lines for n in quoted), \
+            f"{name} says {quoted}, fake_framework.py is {lines} lines"
