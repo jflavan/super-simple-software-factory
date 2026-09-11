@@ -14,10 +14,10 @@ anything a framework learned lives in its own FrameworkFacts subclass under
 
 from __future__ import annotations
 
-from pathlib import PurePosixPath
+import ast
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class FrameworkFacts(BaseModel):
@@ -35,27 +35,21 @@ class Frontend(BaseModel):
     """One JavaScript package: where it is, how to run it, what it can do.
 
     Shared by every framework that lives in a package.json — SvelteKit today,
-    Angular or React tomorrow. The framework-specific slots at the bottom are
-    filled by whichever framework found this package, and left empty by the
-    ones that have no such concept.
+    Angular or React tomorrow.
+
+    Deliberately generic: this is exactly what `probes.node_packages` can learn
+    from a package.json and a lockfile, and nothing more. Anything only one
+    framework cares about belongs in that framework's own FrameworkFacts
+    subclass, not as an empty slot every other framework carries.
     """
 
     directory: str                  # repo-relative, forward slashes; "." for the root
     package_manager: str = "npm"    # npm | pnpm | yarn | bun, from the lockfile
     scripts: list[str] = Field(default_factory=list)   # keys of package.json "scripts"
     env_example: str = ""           # the .env.example that governs it, if one exists
-    csp_file: str = ""              # the file declaring its content-security policy,
-                                    # for frameworks that have one (SvelteKit:
-                                    # src/hooks.server.ts). Empty when there is none.
 
     def has(self, script: str) -> bool:
         return script in self.scripts
-
-    @property
-    def label(self) -> str:
-        """A short, stable name for this package — used in block names."""
-        name = PurePosixPath(self.directory).name
-        return name or "root"
 
 
 class ProfileFacts(BaseModel):
@@ -70,10 +64,16 @@ class ProfileFacts(BaseModel):
     frameworks: dict[str, FrameworkFacts] = Field(default_factory=dict)
 
     def of(self, name: str) -> FrameworkFacts:
-        """This framework's section. KeyError if the profile never declared it."""
-        return self.frameworks[name]
+        """This framework's section, or a KeyError that says what is there."""
+        try:
+            return self.frameworks[name]
+        except KeyError:
+            raise KeyError(
+                f"profile {self.profile!r} has no {name!r} section - "
+                f"has: {sorted(self.frameworks)}") from None
 
 
+QualityArea = Literal["frontend", "backend"]
 QualityOperation = Literal["lint", "typecheck", "build", "test"]
 QualityTier = Literal["fast", "full"]
 
@@ -87,7 +87,7 @@ class QualityBlock(BaseModel):
     """
 
     name: str
-    area: Literal["frontend", "backend"]
+    area: QualityArea
     # Typed against the same values QualityCheckSpec accepts. An untyped string
     # here would let a framework emit a bad operation that nothing rejects until
     # the GENERATED file is imported at ADW runtime, a whole install later.
@@ -97,6 +97,23 @@ class QualityBlock(BaseModel):
     tier: QualityTier = "fast"
     timeout_seconds: int = 120
     source: str = ""
+
+    @field_validator("cwd")
+    @classmethod
+    def _cwd_stays_inside_the_repo(cls, value: str) -> str:
+        """Mirrors QualityCheckSpec.cwd's validator in the stamped runtime.
+
+        This is the generation-time half of that check: a framework building a
+        bad `cwd` is caught HERE, while the framework that produced it is still
+        on the stack, rather than when the GENERATED module is imported at ADW
+        runtime and the failure has nothing left pointing back to its cause.
+        """
+        text = value.replace("\\", "/")
+        if text.startswith("/") or (len(text) > 1 and text[1] == ":"):
+            raise ValueError(f"cwd must be relative to the repo root, got {value!r}")
+        if ".." in text.split("/"):
+            raise ValueError(f"cwd must not climb out of the repo, got {value!r}")
+        return text
 
 
 class GateWiring(BaseModel):
@@ -109,6 +126,23 @@ class GateWiring(BaseModel):
     module: str                     # stamped module it comes from, e.g. "gates_dotnet"
     name: str                       # the symbol to import
     call: str                       # the expression, e.g. "env_example_sync([...], [...])"
+
+    @field_validator("call")
+    @classmethod
+    def _call_is_an_expression(cls, value: str) -> str:
+        """Parse it here, where the framework that wrote it is still on the stack.
+
+        This string is interpolated into a generated module that a DIFFERENT
+        process imports, an install later. A framework that builds it by
+        concatenation rather than repr() would otherwise surface as a
+        SyntaxError inside an ADW run, with nothing pointing back here.
+        """
+        try:
+            ast.parse(value, mode="eval")
+        except SyntaxError as error:
+            raise ValueError(
+                f"gate call must be a Python expression, got {value!r}") from error
+        return value
 
 
 class GenerationReport(BaseModel):

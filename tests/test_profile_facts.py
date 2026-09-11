@@ -43,9 +43,14 @@ def test_a_framework_section_may_be_filled_after_construction():
 
 
 def test_asking_for_a_framework_the_profile_does_not_declare_is_an_error():
-    facts = ProfileFacts(profile="x", repo_root=".")
-    with pytest.raises(KeyError):
+    facts = ProfileFacts(profile="x", repo_root=".",
+                         frameworks={"fake": _Fake(thing="sln")})
+    with pytest.raises(KeyError) as excinfo:
         facts.of("angular")
+    message = str(excinfo.value)
+    assert "x" in message
+    assert "angular" in message
+    assert "fake" in message
 
 
 def test_profile_facts_requires_its_identity():
@@ -58,11 +63,6 @@ def test_a_frontend_knows_which_scripts_it_has():
                         scripts=["check", "test", "build"])
     assert frontend.has("check")
     assert not frontend.has("lint")
-    assert frontend.label == "web"
-
-
-def test_a_frontend_at_the_repo_root_still_has_a_label():
-    assert Frontend(directory=".", package_manager="npm").label == "root"
 
 
 def test_a_quality_block_defaults_to_fast_at_the_repo_root():
@@ -100,9 +100,31 @@ def test_the_block_vocabulary_matches_the_stamped_runtime():
     """
     from typing import get_args
 
+    from adw_modules.data_types import QualityArea as RuntimeArea
     from adw_modules.data_types import QualityOperation as RuntimeOperation
     from adw_modules.data_types import QualityTier as RuntimeTier
-    from profiles.facts import QualityOperation, QualityTier
+    from profiles.facts import QualityArea, QualityOperation, QualityTier
 
     assert set(get_args(QualityOperation)) == set(get_args(RuntimeOperation))
     assert set(get_args(QualityTier)) == set(get_args(RuntimeTier))
+    assert set(get_args(QualityArea)) == set(get_args(RuntimeArea))
+
+
+def test_a_block_refuses_a_vocabulary_it_cannot_emit():
+    """The typed fields are only worth their comment if they actually reject."""
+    for bad in ({"operation": "deploy"}, {"area": "database"}, {"tier": "someday"}):
+        with pytest.raises(ValidationError):
+            QualityBlock(**{"name": "x", "area": "backend", "operation": "build",
+                            "argv": ["a"], **bad})
+
+
+def test_a_gate_call_that_is_not_an_expression_is_refused():
+    with pytest.raises(ValidationError):
+        GateWiring(module="gates_x", name="g", call="def not_an_expression(:")
+
+
+def test_a_block_cwd_may_not_climb_out_of_the_repo():
+    for escape in ("/etc", "../sibling", "C:/Windows"):
+        with pytest.raises(ValidationError):
+            QualityBlock(name="x", area="backend", operation="build",
+                         argv=["a"], cwd=escape)
