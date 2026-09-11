@@ -110,3 +110,60 @@ def test_a_path_containing_a_hash_is_read_correctly(tmp_path, capsys):
 
     assert adw_trace.main(["sessions", "--db", str(path)]) == 0
     assert "hashy" in capsys.readouterr().out
+
+
+def test_a_file_that_is_not_a_database_is_reported_not_crashed(tmp_path, capsys):
+    path = tmp_path / "sssf.db"
+    path.write_text("this is not a database")
+
+    code = adw_trace.main(["sessions", "--db", str(path)])
+
+    assert code == 1
+    assert "not a readable SQLite database" in capsys.readouterr().out
+
+
+def test_a_database_without_sssf_tables_is_reported_not_crashed(tmp_path, capsys):
+    path = tmp_path / "other.db"
+    conn = sqlite3.connect(path)
+    conn.execute("CREATE TABLE unrelated (x INTEGER)")
+    conn.commit()
+    conn.close()
+
+    code = adw_trace.main(["sessions", "--db", str(path)])
+
+    assert code == 1
+    assert "not an SSSF trace" in capsys.readouterr().out
+
+
+def test_full_shows_an_error_that_truncation_would_have_cut(tmp_path, capsys):
+    """The exception type must survive — it is why anyone reads this."""
+    long_error = ("Traceback (most recent call last):\n" + "  File x\n" * 80 +
+                  "SyntaxError: the actual problem")
+    path = tmp_path / "sssf.db"
+    conn = sqlite3.connect(path)
+    conn.executescript(SCHEMA)
+    conn.execute(
+        "INSERT INTO phases (phase_id, adw_id, seq, name, kind, owner, "
+        "description, status, error) VALUES (?,?,?,?,?,?,?,?,?)",
+        ("p1", "a1", 1, "build", "agent", "builder", "Implement it", "fail", long_error))
+    conn.commit()
+    conn.close()
+
+    adw_trace.main(["phases", "a1", "--db", str(path), "--full"])
+
+    assert "SyntaxError: the actual problem" in capsys.readouterr().out
+
+
+def test_sessions_limit_is_adjustable(tmp_path, capsys):
+    path = tmp_path / "sssf.db"
+    conn = sqlite3.connect(path)
+    conn.executescript(SCHEMA)
+    for i in range(25):
+        conn.execute("INSERT INTO sessions (adw_id, status, started_at) VALUES (?,?,?)",
+                     (f"run{i:02d}", "success", f"2026-09-10T10:{i:02d}:00Z"))
+    conn.commit()
+    conn.close()
+
+    adw_trace.main(["sessions", "--db", str(path), "--limit", "25"])
+
+    assert "run00" in capsys.readouterr().out
