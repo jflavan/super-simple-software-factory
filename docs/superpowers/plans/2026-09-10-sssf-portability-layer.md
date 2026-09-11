@@ -1423,8 +1423,10 @@ def run(request: AgentRequest, on_event: Optional[Callable[[dict], None]] = None
     session_value, resume = session_uuid(request.session_dir, request.session_id)
     cmd = build_command(request, session_value, resume)
 
-    env = operator_env()
-    env.update(thinking_env(request.thinking))
+    # apply_thinking, not env.update(thinking_env(...)): the child env starts as
+    # a copy of the operator's, so an inherited MAX_THINKING_TOKENS has to be
+    # removed for `off` to mean off.
+    env = apply_thinking(operator_env(), request.thinking)
 
     raw_path = Path(request.raw_output_path)
     raw_path.parent.mkdir(parents=True, exist_ok=True)
