@@ -15,8 +15,12 @@ environment).
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from pathlib import Path
+
+from .data_types import AgentRequest
+from .utils import resolve_argv
 
 THINKING_TOKENS = {
     "off": 0,
@@ -181,3 +185,32 @@ def session_uuid(session_dir: str, sssf_session_id: str) -> tuple[str, bool]:
     temp.write_text(json.dumps(mapping, indent=2))
     temp.replace(path)          # atomic on POSIX and Windows
     return minted, False
+
+
+CLAUDE_PATH = os.environ.get("CLAUDE_CODE_PATH", "claude")
+
+
+def build_command(request: AgentRequest, session_uuid_value: str,
+                  resume: bool) -> list[str]:
+    """The full argv for one non-interactive Claude Code turn.
+
+    Pure and separately testable: everything that decides WHAT runs lives here,
+    so `run` is left with only the streaming.
+    """
+    _, model_id = resolve_model(request.model)
+    cmd = [
+        CLAUDE_PATH, "-p",
+        "--output-format", "stream-json", "--verbose",
+        "--model", model_id,
+        "--append-system-prompt", request.system_prompt,
+        "--permission-mode", "acceptEdits",
+    ]
+    cmd += ["--resume", session_uuid_value] if resume else ["--session-id", session_uuid_value]
+    tools = allowed_tools(request.tools)
+    # `is not None`, not a truthiness test: None means "every tool" and an empty
+    # list means "no tools", and `if tools:` collapses those two opposites into
+    # the same branch — handing a deliberately tool-less agent the full set.
+    if tools is not None:
+        cmd += ["--allowedTools", ",".join(tools)]
+    cmd.append(request.prompt)
+    return resolve_argv(cmd)

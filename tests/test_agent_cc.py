@@ -5,6 +5,7 @@ import pytest
 import uuid as uuid_module
 
 from adw_modules import agent_cc
+from adw_modules.data_types import AgentRequest
 
 
 def test_thinking_off_sets_no_budget():
@@ -172,3 +173,69 @@ def test_the_map_is_readable_by_a_later_call_from_the_file_alone(tmp_path):
     on_disk = json.loads((tmp_path / "cc_sessions.json").read_text())
 
     assert on_disk == {"sssf-abcd1234-builder-9f2a": minted}
+
+
+def _request(**overrides) -> AgentRequest:
+    defaults = dict(
+        prompt="do the thing",
+        system_prompt="you are a builder",
+        model="anthropic/claude-opus-5",
+        thinking="medium",
+        session_id="sssf-abcd1234-builder-9f2a",
+        session_dir="/tmp/sessions",
+        raw_output_path="/tmp/raw.jsonl",
+        tools=["read", "bash"],
+        extensions=[],
+        cwd="/repo",
+    )
+    defaults.update(overrides)
+    return AgentRequest(**defaults)
+
+
+def test_command_creates_a_session_on_the_first_send():
+    cmd = agent_cc.build_command(_request(), "11111111-2222-3333-4444-555555555555",
+                                 resume=False)
+
+    assert "--session-id" in cmd
+    assert "--resume" not in cmd
+    assert cmd[cmd.index("--session-id") + 1] == "11111111-2222-3333-4444-555555555555"
+
+
+def test_command_resumes_on_a_later_send():
+    cmd = agent_cc.build_command(_request(), "11111111-2222-3333-4444-555555555555",
+                                 resume=True)
+
+    assert "--resume" in cmd
+    assert "--session-id" not in cmd
+
+
+def test_command_carries_model_tools_and_prompt():
+    cmd = agent_cc.build_command(_request(), "11111111-2222-3333-4444-555555555555",
+                                 resume=False)
+
+    assert cmd[cmd.index("--model") + 1] == "claude-opus-5"
+    assert cmd[cmd.index("--allowedTools") + 1] == "Read,Bash"
+    assert cmd[-1] == "do the thing", "the prompt is the final positional argument"
+    assert "--output-format" in cmd and cmd[cmd.index("--output-format") + 1] == "stream-json"
+
+
+def test_no_tools_key_means_no_allowlist_flag():
+    cmd = agent_cc.build_command(_request(tools=None),
+                                 "11111111-2222-3333-4444-555555555555", resume=False)
+
+    assert "--allowedTools" not in cmd
+
+
+def test_an_empty_tool_list_is_not_the_same_as_no_tools_key():
+    """`None` means every tool; `[]` means none. They must not collapse.
+
+    config.md states an empty list "is not 'all tools' — it is a tool-less
+    agent". A truthiness test would silently grant the full set instead.
+    """
+    every = agent_cc.build_command(_request(tools=None),
+                                   "11111111-2222-3333-4444-555555555555", resume=False)
+    none_at_all = agent_cc.build_command(_request(tools=[]),
+                                         "11111111-2222-3333-4444-555555555555", resume=False)
+
+    assert "--allowedTools" not in every
+    assert "--allowedTools" in none_at_all
