@@ -15,7 +15,7 @@ import subprocess
 from pathlib import Path
 
 from .data_types import EnvelopeBase, GateReport
-from .utils import changed_files, path_matches
+from .utils import claimed_files, path_matches
 
 TAIL_CHARS = 1000        # command output kept as evidence on a failure
 
@@ -118,19 +118,27 @@ def doc_policy(envelope: EnvelopeBase, run) -> GateReport:
 
     Silent when no rule triggers. A gate that records a check per rule per run
     would bury the one violation that matters under a hundred green lines.
+
+    Judges the envelope's CLAIMS, like every gate here. An agent that omits a
+    file from `changed_files` is not caught by this — `permissions.enforce`
+    sees the real diff, but it runs after the gates and only checks what an
+    agent may WRITE, not what it admitted to. A documentation contract is a
+    prompt-level nudge with a mechanical check behind it, not a proof.
     """
     report = GateReport()
-    changed = changed_files(envelope, run)
+    changed = claimed_files(envelope, run)
     for rule in getattr(run.cfg, "doc_policy", []) or []:
         triggers = [f for f in changed if path_matches(f, rule.when)]
         if not triggers:
             continue
+        trigger = (f"{triggers[0]} (+{len(triggers) - 1} more)" if len(triggers) > 1
+                   else triggers[0])
         for required in rule.require:
             present = any(path_matches(f, required) for f in changed)
             report.check(
-                required,
+                f"{required} (required by {rule.when})",
                 present,
                 f"required by {rule.when}, and in the change" if present
-                else f"{triggers[0]} matches {rule.when}, which requires "
+                else f"{trigger} matches {rule.when}, which requires "
                      f"{required} — not in the change")
     return report

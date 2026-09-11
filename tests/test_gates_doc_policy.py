@@ -6,7 +6,7 @@ import pytest
 
 from adw_modules import gates
 from adw_modules.data_types import BuildOutput, DocPolicyRule, SSSFConfig
-from adw_modules.utils import changed_files, path_matches, repo_relative
+from adw_modules.utils import claimed_files, path_matches, read_text, repo_relative
 
 
 def _run(tmp_path, rules=()):
@@ -27,6 +27,10 @@ def test_a_star_does_not_cross_a_directory_separator():
 def test_double_star_slash_matches_zero_directories():
     assert path_matches("README.md", "**/*.md")
     assert path_matches("docs/a/b.md", "**/*.md")
+    # `.*` would also satisfy the two assertions above, and would be wrong:
+    # it would let `a/**/b` match `a/xb`. This is what pins the boundary.
+    assert path_matches("apps/Auth.cs", "apps/**/Auth.cs")
+    assert not path_matches("apps/xAuth.cs", "apps/**/Auth.cs")
 
 
 def test_a_trailing_slash_is_a_directory_prefix():
@@ -38,19 +42,53 @@ def test_windows_separators_are_normalised():
     assert path_matches("docs\\a.md", "docs/*.md")
 
 
+def test_a_question_mark_matches_one_character_but_not_a_separator():
+    assert path_matches("a1b.txt", "a?b.txt")
+    assert not path_matches("ab.txt", "a?b.txt")
+    assert not path_matches("a/b.txt", "a?b.txt")
+
+
+def test_windows_separators_are_normalised_on_the_pattern_too():
+    """A protected_files entry that matches nothing fails OPEN."""
+    assert path_matches("docs/a.md", "docs\\*.md")
+    assert path_matches("adws/adw_modules/x.py", "adws\\adw_modules\\")
+
+
 def test_repo_relative_strips_an_absolute_root():
     assert repo_relative("/repo/apps/a.cs", "/repo") == "apps/a.cs"
     assert repo_relative("./apps/a.cs", "/repo") == "apps/a.cs"
     assert repo_relative("apps/a.cs", "/repo") == "apps/a.cs"
+    # lstrip("/repo") would also return "apps/a.cs" above; these are what
+    # separate a prefix strip from a character strip.
+    assert repo_relative("/repo/report.md", "/repo") == "report.md"
+    assert repo_relative("/repo2/a.cs", "/repo") == "/repo2/a.cs"
 
 
-def test_changed_files_normalises_every_entry(tmp_path):
+def test_claimed_files_normalises_every_entry(tmp_path):
     envelope = _envelope([str(tmp_path / "a.cs"), "./b.cs", "c\\d.cs"])
-    assert changed_files(envelope, _run(tmp_path)) == ["a.cs", "b.cs", "c/d.cs"]
+    assert claimed_files(envelope, _run(tmp_path)) == ["a.cs", "b.cs", "c/d.cs"]
 
 
-def test_changed_files_on_an_envelope_without_the_field_is_empty(tmp_path):
-    assert changed_files(SimpleNamespace(), _run(tmp_path)) == []
+def test_claimed_files_on_an_envelope_without_the_field_is_empty(tmp_path):
+    assert claimed_files(SimpleNamespace(), _run(tmp_path)) == []
+
+
+def test_read_text_returns_the_contents(tmp_path):
+    target = tmp_path / "a.txt"
+    target.write_text("hello")
+    assert read_text(target) == "hello"
+
+
+def test_read_text_is_quiet_about_a_deleted_file(tmp_path):
+    assert read_text(tmp_path / "gone.txt") == ""
+
+
+def test_read_text_lets_a_real_io_failure_through(tmp_path):
+    """An unreadable policy file is not an empty policy file."""
+    directory = tmp_path / "notafile"
+    directory.mkdir()
+    with pytest.raises(OSError):
+        read_text(directory)
 
 
 # ── the gate ─────────────────────────────────────────────────────────────────

@@ -135,6 +135,13 @@ def glob_to_regex(pattern: str) -> re.Pattern:
     the root as well as `docs/a/b.md`. Requiring at least one directory there
     is a trap: the pattern reads as "any markdown file anywhere" and every
     author who writes it means that.
+
+    Cached because the same small set of patterns (`writes:`, `protected_files`,
+    `doc_policy`) is matched against every changed path, every run — this caches
+    the translation LOOP above, not just the resulting regex. `re.compile` has
+    its own cache, but that one is process-wide and shared with every regex any
+    module compiles, so it can be evicted by unrelated traffic; this cache is
+    ours alone.
     """
     out, i = [], 0
     while i < len(pattern):
@@ -159,12 +166,18 @@ def glob_to_regex(pattern: str) -> re.Pattern:
 def path_matches(path: str, pattern: str) -> bool:
     """One path against one pattern: prefix, glob, or exact equality.
 
-    Backslashes are folded to forward slashes first. git reports forward
-    slashes on every platform, but an agent reporting `changed_files` on
-    Windows may not, and a permission check that silently stops matching on
-    one platform is the worst possible failure of a permission check.
+    Backslashes are folded to forward slashes first, on BOTH sides. git
+    reports forward slashes on every platform, but an agent reporting
+    `changed_files` on Windows may not, and a permission check that silently
+    stops matching on one platform is the worst possible failure of a
+    permission check. The pattern gets the same fold because it is written by
+    the same operator on the same platform: a `protected_files` entry typed
+    with native Windows separators otherwise ends without a `/`, contains no
+    `*` or `?`, falls into the exact-equality branch, matches nothing, and
+    fails OPEN instead of protecting the path it names.
     """
     path = str(path).replace("\\", "/")
+    pattern = str(pattern).replace("\\", "/")
     if pattern.endswith("/"):                      # directory prefix
         return path.startswith(pattern)
     if "*" in pattern or "?" in pattern:
@@ -187,19 +200,30 @@ def repo_relative(path: str, repo_root: str) -> str:
     return text[2:] if text.startswith("./") else text
 
 
-def changed_files(envelope, run) -> list[str]:
-    """Every path an envelope claims to have changed, repo-relative."""
-    return [repo_relative(f, getattr(run, "repo_root", ""))
+def claimed_files(envelope, run) -> list[str]:
+    """Every path an envelope CLAIMS to have changed, repo-relative.
+
+    Named for its epistemics, and deliberately not `changed_files` — that name
+    belongs to git_helper, which reports what git OBSERVED. A gate that mixes
+    the two up is checking the agent's homework against the agent's own answer
+    sheet.
+    """
+    return [repo_relative(f, run.repo_root)
             for f in getattr(envelope, "changed_files", [])]
 
 
 def read_text(path) -> str:
-    """File text, or empty when it is gone.
+    """File text, or empty when the file is not there.
 
     A gate reads files the change touched, and `changed_files` includes
-    DELETIONS — so "the file is not there" is an ordinary case, not an error.
+    DELETIONS — so "the file is gone" is an ordinary case, not an error.
+
+    Only absence is quiet. A PermissionError or a directory where a file was
+    expected propagates, because "the harness could not read the policy file"
+    is not a problem the agent can fix, and laundering it into a gate violation
+    asks the agent to fix it anyway.
     """
     try:
         return Path(path).read_text(errors="replace")
-    except OSError:
+    except (FileNotFoundError, NotADirectoryError):
         return ""

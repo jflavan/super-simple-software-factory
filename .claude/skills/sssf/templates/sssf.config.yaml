@@ -26,6 +26,13 @@ defaults:
   # the session runtime under data_dir — context_handoff/, envelopes, prompts,
   # raw output. Every agent can always write its own report; `writes: []` means
   # read-only with respect to the repo, not mute.
+  #
+  # Glob shapes, same engine as doc_policy: `**/` matches zero or more
+  # directories, so `**/*.md` includes files at the repo root, not just nested
+  # ones. A trailing `/` is a literal directory prefix and disables glob
+  # characters within it — `adws/adw_modules/` matches everything under that
+  # directory as plain text, `*` and `?` included. A bare `**` grants
+  # everything and should be treated like `writes: null`.
   protected_files:
     - adws/adw_modules/
     - adws/adw_sssf_config/
