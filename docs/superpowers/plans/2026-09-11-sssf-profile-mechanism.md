@@ -3226,7 +3226,12 @@ class CompositeProfile:
             blocks += emitted
             unresolved += notes
 
-        clashes = sorted(name for name, count in Counter(b.name for b in blocks).items()
+        # Folded, because a block name IS an artifact directory, and Windows
+        # and default macOS filesystems are case-insensitive: `test-Web` from
+        # one framework and `test-web` from another resolve to one directory
+        # and overwrite each other's log, past an exact-match guard.
+        clashes = sorted(name for name, count
+                         in Counter(b.name.casefold() for b in blocks).items()
                          if count > 1)
         if clashes:
             raise SystemExit(
@@ -3899,7 +3904,15 @@ LOCAL_HOSTS = ("localhost", "127.0.0.1", "0.0.0.0", "[::1]")
 
 
 def _sources(changed: list[str], directory: str, exclude: str = "") -> list[str]:
-    prefix = directory.rstrip("/") + "/"
+    """The changed source files belonging to one frontend.
+
+    A frontend at the repo root arrives as "." - `npx sv create` in a fresh
+    repo is the single-app default, so this is the COMMON shape, not an edge
+    case. Its prefix is empty: changed files are repo-relative and never
+    `./`-prefixed, so treating "." as a literal prefix would match nothing and
+    the gate would report `passed` having examined no file at all.
+    """
+    prefix = "" if directory in (".", "") else directory.rstrip("/") + "/"
     return [f for f in changed
             if f.startswith(prefix) and f != exclude
             and Path(f).suffix in SOURCE_SUFFIXES]
@@ -4830,6 +4843,15 @@ def select_profile(root: Path, name: str | None, disabled: bool):
         print(f"\nno profile matches this repo (tried: {', '.join(registry.names())})."
               f"\n  quality.py keeps its placeholder blocks - wire them by hand, or "
               f"add a profile.")
+        # A manifest that does not parse never revealed which framework it
+        # belonged to, so no framework module can report it - and a repo whose
+        # ONLY manifest is broken looks exactly like a repo with no frontend.
+        # This is the one place that can say so out loud.
+        unreadable: list[str] = []
+        probes.node_packages(root, "", unreadable)
+        for path in unreadable:
+            print(f"  ! {path} does not parse as JSON - a package it declares "
+                  f"would be invisible to detection")
     return profile
 ```
 
