@@ -110,11 +110,9 @@ def test_a_missing_working_directory_is_named_in_the_artifact(tmp_path):
     ), _fake_run(tmp_path))
 
     assert not result.passed
-    # Compare with slashes normalized: the artifact renders the cwd with the
-    # platform's native separator (backslashes on Windows), and the point of
-    # this test is that the missing directory is named at all, not which
-    # separator character names it.
-    assert "apps/nope" in Path(result.output_artifact).read_text().replace("\\", "/")
+    # Native separators on both sides, no normalization — this pins the
+    # resolved workdir, not just a relative fragment of the spec's cwd.
+    assert str(tmp_path / "apps" / "nope") in Path(result.output_artifact).read_text()
 
 
 def test_the_trace_payload_carries_the_cwd_and_the_tier(tmp_path, monkeypatch):
@@ -136,6 +134,13 @@ def test_the_trace_payload_carries_the_cwd_and_the_tier(tmp_path, monkeypatch):
 def test_an_absolute_cwd_is_refused(tmp_path):
     """`Path(root) / "/elsewhere"` discards the root and succeeds in the wrong place."""
     for escape in ("/etc", "C:/Windows", "D:\\other"):
+        with pytest.raises(Exception):
+            QualityCheckSpec(name="x", area="backend", operation="build",
+                             argv=["true"], cwd=escape)
+
+
+def test_a_cwd_that_climbs_out_of_the_repo_is_refused():
+    for escape in ("..", "../sibling", "apps/../../elsewhere"):
         with pytest.raises(Exception):
             QualityCheckSpec(name="x", area="backend", operation="build",
                              argv=["true"], cwd=escape)
@@ -207,12 +212,133 @@ def test_a_failing_block_is_reported_with_its_output(tmp_path, monkeypatch):
     assert "boom" in result.failures[0]
 
 
-def test_a_broken_generated_module_is_not_swallowed(monkeypatch):
-    """A typo in quality_blocks.py must raise, not silently fall back to fakes."""
-    def raise_unrelated():
-        raise ModuleNotFoundError("No module named 'nonexistent_dependency'",
-                                  name="nonexistent_dependency")
+def _generate(monkeypatch, tmp_path, source: str):
+    """Write a real quality_blocks.py into a throwaway copy of adw_modules.
 
-    monkeypatch.setattr(quality, "_import_generated_blocks", raise_unrelated)
+    The loader is what is under test here, so it has to do its real work: find
+    a real module on a real path and import it. Monkeypatching it would test
+    the monkeypatch.
+    """
+    import shutil
+    import sys
+    package = tmp_path / "adw_modules"
+    shutil.copytree(Path(quality.__file__).parent, package,
+                    ignore=shutil.ignore_patterns("__pycache__"))
+    (package / "quality_blocks.py").write_text(source, encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    for name in list(sys.modules):
+        if name == "adw_modules" or name.startswith("adw_modules."):
+            monkeypatch.delitem(sys.modules, name, raising=False)
+    import importlib
+    return importlib.import_module("adw_modules.quality")
+
+
+def test_a_real_generated_file_is_loaded(tmp_path, monkeypatch):
+    module = _generate(monkeypatch, tmp_path,
+                       "from .data_types import QualityCheckSpec\n"
+                       "BLOCKS = [QualityCheckSpec(name='t', area='backend',\n"
+                       "                           operation='test', argv=['echo', 'x'])]\n")
+    assert [b.name for b in module.blocks()] == ["t"]
+
+
+def test_no_generated_file_falls_back_to_placeholders(tmp_path, monkeypatch):
+    import shutil, sys, importlib
+    package = tmp_path / "adw_modules"
+    shutil.copytree(Path(quality.__file__).parent, package,
+                    ignore=shutil.ignore_patterns("__pycache__"))
+    (package / "quality_blocks.py").unlink(missing_ok=True)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    for name in list(sys.modules):
+        if name == "adw_modules" or name.startswith("adw_modules."):
+            monkeypatch.delitem(sys.modules, name, raising=False)
+    module = importlib.import_module("adw_modules.quality")
+    assert [b.name for b in module.blocks()] == ["test", "lint", "typecheck", "build"]
+
+
+def test_a_syntax_error_in_the_generated_file_is_fatal(tmp_path, monkeypatch):
+    module = _generate(monkeypatch, tmp_path, "BLOCKS = [\n")
+    with pytest.raises(SyntaxError):
+        module.blocks()
+
+
+def test_a_generated_file_without_BLOCKS_is_fatal(tmp_path, monkeypatch):
+    module = _generate(monkeypatch, tmp_path, "SPECS = []\n")
+    with pytest.raises(ImportError):
+        module.blocks()
+
+
+def test_a_missing_dependency_named_like_the_module_is_still_fatal(tmp_path, monkeypatch):
+    """The hole find_spec closes: a self-named missing import must not look absent."""
+    module = _generate(monkeypatch, tmp_path, "import quality_blocks\nBLOCKS = []\n")
     with pytest.raises(ModuleNotFoundError):
+        module.blocks()
+
+
+def test_a_generated_file_emitting_dicts_fails_at_the_boundary(tmp_path, monkeypatch):
+    """Not later, inside _run_tier, with an AttributeError far from the cause."""
+    module = _generate(monkeypatch, tmp_path, "BLOCKS = [{'name': 'a'}]\n")
+    with pytest.raises(Exception):
+        module.blocks()
+
+
+def test_duplicate_block_names_are_refused(monkeypatch):
+    """A block's name is its artifact directory; two of one name lose evidence."""
+    monkeypatch.setattr(quality, "_import_generated_blocks", lambda: [
+        QualityCheckSpec(name="test", area="backend", operation="test", argv=["a"]),
+        QualityCheckSpec(name="test", area="frontend", operation="test", argv=["b"]),
+    ])
+    with pytest.raises(ValueError, match="duplicate quality block name"):
         quality.blocks()
+
+
+def test_an_empty_block_list_refuses_to_report_green(tmp_path, monkeypatch):
+    """Zero commands is not success. It is the failure this design removes."""
+    monkeypatch.setattr(quality, "_import_generated_blocks", lambda: [])
+    with pytest.raises(RuntimeError, match="no quality blocks"):
+        quality.run_tests(_fake_run(tmp_path))
+
+
+def test_a_fast_tier_with_nothing_in_it_refuses_to_report_green(tmp_path, monkeypatch):
+    """A repo whose only suite needs Docker must not silently skip its fix loop."""
+    monkeypatch.setattr(quality, "_import_generated_blocks", lambda: [
+        QualityCheckSpec(name="integration", area="backend", operation="test",
+                         argv=["a"], tier="full"),
+    ])
+    with pytest.raises(RuntimeError, match="none selected"):
+        quality.run_tests(_fake_run(tmp_path))
+    # ...but run_quality, which selects both tiers, is fine
+    monkeypatch.setattr(quality, "_run", lambda spec, run: _passing(spec, []))
+    assert quality.run_quality(_fake_run(tmp_path)).passed
+
+
+def test_a_test_block_is_traced_as_a_test(tmp_path, monkeypatch):
+    """Not as a build. A trace query for test failures has to find them."""
+    events = []
+    run = _fake_run(tmp_path)
+    run.tracer = SimpleNamespace(event=events.append)
+    monkeypatch.setattr(quality.subprocess, "run", lambda argv, **kw: SimpleNamespace(
+        returncode=0, stdout="", stderr=""))
+
+    quality._run(QualityCheckSpec(name="test-api", area="backend", operation="test",
+                                  argv=["git", "status"]), run)
+
+    assert events[0].payload["operation"] == "test"
+
+
+def test_a_generated_block_runs_end_to_end(tmp_path, monkeypatch):
+    """blocks() -> _run_tier -> _run, with a real subprocess and a real artifact."""
+    module = _generate(monkeypatch, tmp_path,
+                       "from .data_types import QualityCheckSpec\n"
+                       "import sys\n"
+                       "BLOCKS = [QualityCheckSpec(name='hello', area='backend',\n"
+                       "                           operation='test',\n"
+                       "                           argv=[sys.executable, '-c',\n"
+                       "                                 \"print('ran')\"])]\n")
+    work = tmp_path / "work"
+    work.mkdir()
+
+    result = module.run_tests(_fake_run(work))
+
+    assert result.passed
+    assert len(result.checks) == 1
+    assert "ran" in Path(result.artifacts[0]).read_text()

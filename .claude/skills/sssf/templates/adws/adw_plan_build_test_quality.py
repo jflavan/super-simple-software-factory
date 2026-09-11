@@ -58,7 +58,7 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
             quality_result = quality.run_quality(run)
             record(ph, quality_result)
 
-        # run_quality() already includes the test block; a repo that wants tests
+        # run_quality() already includes every fast block; a repo that wants tests
         # in their own phase can split them out the way this comment does.
         test_result = quality_result
 

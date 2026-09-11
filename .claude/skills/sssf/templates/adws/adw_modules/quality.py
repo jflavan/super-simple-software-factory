@@ -32,13 +32,16 @@ deciding.
 
 from __future__ import annotations
 
+import importlib.util
 import shlex
 import subprocess
 import time
 from pathlib import Path
 
+from pydantic import TypeAdapter
+
 from .data_types import (EventRecord, QualityCheckResult, QualityCheckSpec, QualityResult,
-                         VerifyOutput)
+                         QualityTier, VerifyOutput)
 from .utils import now_iso, operator_env, resolve_argv
 
 # How much of a failing command's output rides back inside the envelope. Enough
@@ -138,7 +141,7 @@ def _placeholder(name: str) -> QualityCheckSpec:
     return QualityCheckSpec(
         name=name,
         area="backend",
-        operation="build" if name in ("test", "build") else name,
+        operation=name,
         argv=["echo", f"PLACEHOLDER {name}: no profile generated "
                       f"adws/adw_modules/quality_blocks.py, and nobody wrote the "
                       f"real {name} command by hand"],
@@ -152,35 +155,65 @@ PLACEHOLDER_BLOCKS = [_placeholder(n) for n in ("test", "lint", "typecheck", "bu
 def _import_generated_blocks() -> list[QualityCheckSpec] | None:
     """The generated block list, or None when no profile ever wrote one.
 
-    Only a missing quality_blocks module means "not generated". Any OTHER
-    import error — a typo in the generated file, a dependency it needs that is
-    not installed — is re-raised. Swallowing it would replace a real command
-    with an `echo` that exits 0, which is the exact failure this whole profile
-    mechanism exists to remove.
+    Existence is decided by `find_spec`, BEFORE importing, so that every error
+    raised *by* the generated file stays fatal regardless of what it names.
+    Matching on `ModuleNotFoundError.name` could not tell "quality_blocks is
+    absent" from "quality_blocks imports something else that is absent and
+    happens to share its name" — and the second case swallowed the error and
+    fell back to `echo` placeholders that exit 0, which is the exact failure
+    this whole mechanism exists to remove.
+
+    The list is validated rather than trusted. A generator that emits dicts, or
+    a spec with a bad operation, should fail HERE with a pydantic error naming
+    the field, not later inside _run_tier with an AttributeError far from the
+    cause.
     """
-    try:
-        from .quality_blocks import BLOCKS
-    except ModuleNotFoundError as error:
-        if error.name in ("adw_modules.quality_blocks", "quality_blocks"):
-            return None
-        raise
-    return list(BLOCKS)
+    if importlib.util.find_spec(f"{__package__}.quality_blocks") is None:
+        return None
+    from .quality_blocks import BLOCKS
+    return TypeAdapter(list[QualityCheckSpec]).validate_python(BLOCKS)
 
 
 def blocks() -> list[QualityCheckSpec]:
-    """This repo's quality blocks: generated if a profile wrote them, else fakes."""
+    """This repo's quality blocks: generated if a profile wrote them, else fakes.
+
+    Names must be unique because a block's name IS its artifact directory
+    (`_check_dir`), and every block in one tier shares a phase sequence number.
+    Two blocks called `test` would overwrite each other's command.log and both
+    report the same path, so the first one's evidence would be gone by the time
+    anyone read it.
+    """
     generated = _import_generated_blocks()
-    return list(generated) if generated is not None else list(PLACEHOLDER_BLOCKS)
+    resolved = generated if generated is not None else list(PLACEHOLDER_BLOCKS)
+    names = [block.name for block in resolved]
+    duplicates = sorted({name for name in names if names.count(name) > 1})
+    if duplicates:
+        raise ValueError(f"duplicate quality block name(s): {duplicates}. "
+                         f"A block's name is its artifact directory.")
+    return resolved
 
 
-def _run_tier(run, tiers: set[str]) -> QualityResult:
+def _run_tier(run, tiers: set[QualityTier]) -> QualityResult:
     """Run every block in the given tiers and collect ALL failures.
 
     Ordering contract for the caller: a failing block does NOT fail the phase.
     The runner did its job; the CODE is what failed. Hand this result to the
     builder and let the bounded repair loop decide the run's fate.
+
+    An EMPTY selection is different in kind, and raises. A green result from
+    zero executed commands is the one failure this whole mechanism exists to
+    remove, and it is reachable two ways: a `BLOCKS = []` that a generator
+    wrote, and a block list where every entry is `full` so the fast tier
+    selects nothing. Neither is something a builder can repair, so neither
+    belongs in the repair loop.
     """
-    checks = [_run(spec, run) for spec in blocks() if spec.tier in tiers]
+    selected = [spec for spec in blocks() if spec.tier in tiers]
+    if not selected:
+        raise RuntimeError(
+            f"no quality blocks in tier(s) {sorted(tiers)}: "
+            f"{len(blocks())} block(s) defined, none selected. Check "
+            f"adws/adw_modules/quality_blocks.py, or re-run `install.py --doctor`.")
+    checks = [_run(spec, run) for spec in selected]
     # A failure is the command, its exit code, and what it actually printed —
     # everything a builder needs to repair without opening a log or being told
     # what the error "means" by a parser that guessed.

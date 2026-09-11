@@ -131,7 +131,7 @@ class DocumentOutput(EnvelopeBase):
 # ── Deterministic quality blocks ─────────────────────────────────────────────
 
 QualityArea = Literal["frontend", "backend"]
-QualityOperation = Literal["lint", "typecheck", "build"]
+QualityOperation = Literal["lint", "typecheck", "build", "test"]
 # Which pass a block belongs to. `fast` runs inside bounded fix loops, where a
 # slow block would multiply its cost by the retry count; `full` adds the blocks
 # that need a service to be up (a Testcontainers suite needs Docker) and runs
@@ -169,6 +169,10 @@ class QualityCheckSpec(BaseModel):
         text = value.replace("\\", "/")
         if text.startswith("/") or (len(text) > 1 and text[1] == ":"):
             raise ValueError(f"cwd must be relative to the repo root, got {value!r}")
+        if ".." in text.split("/"):
+            # `root / "../sibling"` climbs out of the repo exactly as an
+            # absolute path does, only less visibly.
+            raise ValueError(f"cwd must not climb out of the repo, got {value!r}")
         return text
 
 

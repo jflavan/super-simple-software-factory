@@ -9,10 +9,11 @@ Usage:
 
 Phases: engineer(request) -> builder -> code(test) [-> builder(fix) -> code(test) ... bounded]
 
-Testing is CODE. The suite's command is written down in adw_modules/quality.py,
-so running it needs no judgement — only repairing it does. Failures reach the
-builder as an envelope through `quality.as_envelope`, which is the same door an
-agent's report came through, so the repair loop is unchanged.
+Testing is CODE. The fast tier's commands are written down in
+adw_modules/quality_blocks.py, so running them needs no judgement — only
+repairing them does. Failures reach the builder as an envelope through
+`quality.as_envelope`, which is the same door an agent's report came through,
+so the repair loop is unchanged.
 
 A failing suite does NOT fail its phase: the runner did its job, the code is
 what failed. It fails the run, checked at the end, after the bounded fix loop
@@ -51,8 +52,8 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
     test = None
     for i in range(1, MAX_FIX_LOOPS + 1):
         with run.phase(PhaseParams(name=f"test_{i}", kind="code", owner="quality",
-                                   description="Run the suite — a known command, so code runs "
-                                               "it and no agent has to rediscover it")) as ph:
+                                   description="Run the fast tier — known commands, so code runs "
+                                               "them and no agent has to rediscover them")) as ph:
             test = quality.run_tests(run)
             record(ph, test)
 
@@ -63,11 +64,11 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
                                    description="Repair what the suite reported, from its "
                                                "verbatim output")) as ph:
             previous = ph.call(AgentCall(output_type=BuildOutput, prompt=prompt,
-                                         previous=quality.as_envelope(test, "tests"),
+                                         previous=quality.as_envelope(test, "fast checks"),
                                          gates=[gates.diff_matches_claims]))
 
     return run.finish(accepted=test is not None and test.passed,
-                      reason=f"the suite still failed after {MAX_FIX_LOOPS} fix attempt(s)")
+                      reason=f"the fast tier still failed after {MAX_FIX_LOOPS} fix attempt(s)")
 
 
 if __name__ == "__main__":
