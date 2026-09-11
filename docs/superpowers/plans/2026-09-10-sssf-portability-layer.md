@@ -2025,6 +2025,25 @@ Add to the `install.md` post-install checklist, replacing the current item 2:
    `CLAUDE_CODE_PATH` in `.env` if the binary is not on PATH.
 ```
 
+- [ ] **Step 3b: Document the tool-mapping capability widening**
+
+Raised in the Task 7 review. `ls` maps to `Bash`, so an agent whose config asks only for
+`ls` receives arbitrary shell execution on Claude Code. That is deliberate — Claude Code
+has no dedicated listing tool — but it is invisible to whoever wrote the config, and this
+system's whole premise is that `tools:` is a capability list the operator can reason about.
+
+Add to `references/config.md`, in the section documenting `tools:`:
+
+```markdown
+**Tool names are per backend, and one mapping widens capability.** The names in `tools:`
+are pi's. On `coding_agent: claude_code` they are translated (`read` → `Read`, `find` →
+`Glob`, and so on). One translation is not one-for-one: **`ls` maps to `Bash`**, because
+Claude Code has no dedicated listing tool. An agent granted only `ls` therefore gets
+arbitrary shell execution on that backend. If that is not what you want, drop `ls` — and
+remember that `tools:` was never a sandbox anyway: `writes:` and `protected_files` are
+what actually bound an agent, enforced in `adw_modules/permissions.py` after every call.
+```
+
 - [ ] **Step 4: Correct the README failure table**
 
 In `README.md`, replace the `coding_agent: claude_code` row with:
