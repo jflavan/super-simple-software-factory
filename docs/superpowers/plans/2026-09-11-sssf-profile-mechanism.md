@@ -1170,6 +1170,20 @@ git commit -m "feat(profiles): the typed vocabulary frameworks share"
 
 ## Task 5: Stack-agnostic repo probes
 
+> **Amended after review (commit `b3d4e8f`).** The code block below is the text
+> as planned; the shipped module differs in five ways the review required, and
+> `probes.py` is now the authority. `walk()` prunes with `os.walk` instead of
+> filtering `rglob` output (measured 4.05s to 0.018s on a 25k-file repo, and an
+> install walks four times). `package_manager` stops at the filesystem root as
+> well as the repo root, so a call from outside the tree cannot hang.
+> `_summary` returns `(recipes, reason)` and `task_runner` returns
+> `(name, recipes, source)`, so a runner that RAN and refused is distinguishable
+> from one that is absent. `node_packages` takes an optional `unreadable` list,
+> because a manifest that does not parse was otherwise invisible even to
+> `matches()`. `default_branch` drops the `rev-parse HEAD` rung, which returned
+> whatever branch you were standing on in any repo made with `git init`.
+
+
 **Files:**
 - Create: `.claude/skills/sssf/templates/profiles/probes.py`
 - Create: `tests/profile_fixtures.py`
@@ -2678,6 +2692,12 @@ SCRIPTS = [
 
 class SvelteKitFacts(FrameworkFacts):
     frontends: list[Frontend] = Field(default_factory=list)
+    # Manifests that did not parse. probes.node_packages skips them, which makes
+    # them invisible to matches() too - so a repo whose only SvelteKit
+    # package.json has a trailing comma is told "no profile matches", for a
+    # reason the installer knew and did not print. Collected here, reported by
+    # blocks() as unresolved.
+    unreadable: list[str] = Field(default_factory=list)
     # frontend directory -> the file declaring its content-security policy.
     # Lives here rather than on Frontend because only SvelteKit has the
     # concept: a shared type with one empty slot per framework is how "adding
@@ -2704,15 +2724,19 @@ def matches(root) -> bool:
 
 def detect(root) -> SvelteKitFacts:
     root = Path(root)
-    frontends = probes.node_packages(root, MARKER)
+    unreadable: list[str] = []
+    frontends = probes.node_packages(root, MARKER, unreadable)
     csp_files = {f.directory: _csp_file(root, f) for f in frontends}
-    return SvelteKitFacts(frontends=frontends,
+    return SvelteKitFacts(frontends=frontends, unreadable=unreadable,
                           csp_files={d: p for d, p in csp_files.items() if p})
 
 
 def blocks(facts: SvelteKitFacts,
            repo: ProfileFacts) -> tuple[list[QualityBlock], list[str]]:
-    return emit.script_blocks(facts.frontends, repo, SCRIPTS)
+    emitted, unresolved = emit.script_blocks(facts.frontends, repo, SCRIPTS)
+    unresolved += [f"{path} does not parse as JSON - the package it declares is "
+                   f"invisible to detection" for path in facts.unreadable]
+    return emitted, unresolved
 
 
 def describe(facts: SvelteKitFacts) -> list[str]:
@@ -3160,12 +3184,13 @@ class CompositeProfile:
 
     def detect(self, root) -> ProfileFacts:
         root = Path(root)
-        runner, recipes = probes.task_runner(root)
+        runner, recipes, recipes_source = probes.task_runner(root)
         facts = ProfileFacts(
             profile=self.NAME,
             repo_root=str(root),
             task_runner=runner,
             recipes=recipes,
+            recipes_source=recipes_source,
             default_branch=probes.default_branch(root),
             conventions=probes.conventions(root),
         )
@@ -4759,6 +4784,11 @@ def print_profile_report(profile, facts, report) -> None:
         print(f"  {line}")
     print(f"  task runner: {facts.task_runner or '(none)'}"
           f"{f' ({len(facts.recipes)} recipes)' if facts.recipes else ''}")
+    if facts.recipes_source:
+        # A runner that RAN and refused is not the same as one that is absent:
+        # the offline parser is then reading a file the runner itself rejects,
+        # so every recipe it found may be a command that cannot run.
+        print(f"    recipes from: {facts.recipes_source}")
     print(f"  default branch: {facts.default_branch}")
     print(f"  conventions: {', '.join(facts.conventions) or '(none found)'}")
 
