@@ -2207,6 +2207,18 @@ git commit -m "docs: record live verification of the Claude Code backend"
 
 Raised during review, deliberately out of scope for this plan. Recorded so they are not lost.
 
+- **The console crashes on a default Windows code page** (found during live verification).
+  `adw_modules/console.py` prints `▶` as its phase marker, and `rich`'s legacy Windows
+  renderer raises `UnicodeEncodeError` writing it under cp1252 — killing the run *mid-phase*,
+  which leaves that session's row stuck at `status=running` in the trace forever, with no
+  way to reconcile it. Reproduced: `adw_id 39d5cd24` is still `running` and never will not
+  be. The workaround is `PYTHONUTF8=1 PYTHONIOENCODING=utf-8`, which is what the live runs
+  used. This is **pre-existing** — `console.py` predates this work and is untouched by it —
+  but it is squarely a portability defect and belongs in the next pass: either force UTF-8
+  on the console's own stream at startup, or fall back to ASCII markers when the encoding
+  cannot represent them. The orphaned-`running` row is the worse half: a crash anywhere in a
+  phase leaves the trace claiming work is still in flight.
+
 - **Prompts ride on argv, against a ~32KB Windows ceiling** (found during the Task 10 review).
   Both backends pass the rendered system prompt and the user prompt as argv elements —
   `agent_cc.build_command` via `--append-system-prompt`, and `agent_pi.run` via

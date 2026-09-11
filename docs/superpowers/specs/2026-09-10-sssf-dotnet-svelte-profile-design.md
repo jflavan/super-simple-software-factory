@@ -343,6 +343,32 @@ Unit tests, runnable without a live agent:
   frontends, no justfile, no integration tests.
 - Tool-name mapping and thinking-level mapping are table-driven tests.
 
+## 8a. Verified (2026-09-11)
+
+Part A was implemented and verified live against a scratch clone of `codec-chat`, with the
+factory stamped in and the roster switched to `coding_agent: claude_code` on
+`anthropic/claude-sonnet-5`. No file in `codec-chat` was modified; `git status` there was
+empty before and after.
+
+| Run | ADW | Result | Tokens | Cost | `tool_call` rows |
+|---|---|---|---|---|---|
+| `f818e39d` | `adw_prompt` | success | 19 | $0.175044 | 2 |
+| `0eeeab3d` | `adw_scout` | success | 162 | $0.261514 | 20 |
+
+The console banner and the trace agreed exactly on status, tokens and cost for both runs —
+which is the property `run.finish()` exists to guarantee. Validation was also confirmed to
+reject a bad config before spawning anything: an agent declaring `harness_engineering` on
+the Claude Code backend exited 1 naming the agent and the field.
+
+**Live verification earned its place.** The first attempt failed on every run with
+`Error: Input must be provided either through stdin or as a prompt argument when using
+--print`. `--allowedTools` is variadic (`<tools...>`), so it swallowed the trailing
+positional prompt and `--print` received no input. It broke every agent in the roster,
+deterministically — and all 85 offline tests passed throughout, because each asserted on
+the **contents** of the argv list and none on how the CLI **parses** it. The fix moves the
+variadic flag early so a scalar flag and its value always separate it from the prompt, and
+two regression tests now encode that rule rather than our assumptions about it.
+
 ## 9. Risks
 
 | Risk | Mitigation |
