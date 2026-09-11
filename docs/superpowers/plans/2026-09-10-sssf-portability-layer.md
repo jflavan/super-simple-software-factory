@@ -2151,6 +2151,17 @@ git commit -m "docs: record live verification of the Claude Code backend"
 
 Raised during review, deliberately out of scope for this plan. Recorded so they are not lost.
 
+- **Prompts ride on argv, against a ~32KB Windows ceiling** (found during the Task 10 review).
+  Both backends pass the rendered system prompt and the user prompt as argv elements —
+  `agent_cc.build_command` via `--append-system-prompt`, and `agent_pi.run` via
+  `--system-prompt`. Windows `CreateProcess` caps the whole command line near 32KB, and
+  SSSF renders full Markdown templates into `system_prompt`. Typical sizes are safe
+  (~7KB), but a large template plus a large prompt approaches the limit, and the failure
+  is a Windows-only `OSError: [WinError 206] The filename or extension is too long` that
+  would read as a mysterious spawn failure. Neither backend documents a bound. The fix —
+  passing the system prompt by file or stdin — changes both backends' invocation shape, so
+  it belongs with the profile work rather than here. Pre-existing, not introduced.
+
 - **`agent_pi` collapses `tools: []` into "every tool"** (found during the Task 7 review).
   `agent_pi.run` builds its flag with `if request.tools: cmd += ["--tools", ...]`, so an
   agent configured `tools: []` gets no `--tools` flag at all and pi grants it everything —
