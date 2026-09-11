@@ -71,3 +71,25 @@ def test_non_build_phases_are_left_alone():
             name = getattr(output_type, "id", "")
             if name in ("PlanOutput", "ReviewOutput", "ScoutOutput"):
                 assert "profile_gates" not in _gate_source(call), script.name
+
+
+def test_no_adw_runs_the_full_tier_inside_a_bounded_loop():
+    """`run_quality` runs both tiers, and a full block needs Docker up.
+
+    Three shipped documents state this invariant, including the docstring
+    written verbatim into every generated quality_blocks.py. Asserted here
+    because the tier mechanism exists to make it true, and nothing else in the
+    suite executes an ADW's phase sequence.
+    """
+    offenders = []
+    for script in sorted(ADWS.glob("adw_*.py")):
+        tree = ast.parse(script.read_text())
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.For, ast.While)):
+                continue
+            for inner in ast.walk(node):
+                if (isinstance(inner, ast.Call)
+                        and isinstance(inner.func, ast.Attribute)
+                        and inner.func.attr == "run_quality"):
+                    offenders.append(script.name)
+    assert offenders == [], f"run_quality inside a loop in: {sorted(set(offenders))}"

@@ -166,6 +166,39 @@ def select_profile(root: Path, name: str | None, disabled: bool):
     return profile
 
 
+# What a generated file needs from the stamped tree. Each entry is (path,
+# symbol, what breaks without it).
+GENERATED_DEPENDENCIES = (
+    ("adws/adw_modules/quality.py", "_import_generated_blocks",
+     "quality_blocks.py would be inert and the echo placeholders would still run"),
+    ("adws/adw_modules/gates.py", "def profile_gates",
+     "profile_gates.py would be inert and no stack gate would ever fire"),
+    ("adws/adw_modules/utils.py", "def claimed_files",
+     "importing profile_gates.py would raise ImportError at ADW runtime"),
+)
+
+
+def stale_modules(root: Path) -> list[str]:
+    """Stamped modules too old to use what a profile generates.
+
+    `stamp()` skips a file that already exists, so upgrading an existing
+    installation leaves the runtime at its old version while generation
+    happily writes the new files beside it. The result reports a wired factory
+    and wires nothing - this project's own worst failure mode, reached through
+    the ordinary upgrade door rather than a partial write.
+
+    Checked by symbol rather than by version, because there is no version to
+    check and a symbol is what the generated file actually needs.
+    """
+    problems = []
+    for relative, symbol, consequence in GENERATED_DEPENDENCIES:
+        path = root / relative
+        if path.is_file() and symbol not in path.read_text(encoding="utf-8",
+                                                           errors="replace"):
+            problems.append(f"{relative} is missing {symbol!r} - {consequence}")
+    return problems
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--force", action="store_true", help="overwrite existing files")
@@ -219,6 +252,15 @@ def main() -> int:
 
         if profile is not None:
             stamp_profile_gates(profile, root, args.force, stamped, skipped)
+
+            stale = stale_modules(root)
+            if stale:
+                raise SystemExit(
+                    "this repo has an older SSSF stamped in it, and a profile cannot "
+                    "be applied on top of it:\n  - " + "\n  - ".join(stale) +
+                    "\n\nRe-run with --force to refresh the stamped modules. NOTE that "
+                    "--force also overwrites adws/adw_sssf_config/sssf.config.yaml and "
+                    "adws/adw_data/prompt_engineering/ - commit first.")
 
     if profile is not None:
         report = profile.generate(facts, root, write=not args.doctor)

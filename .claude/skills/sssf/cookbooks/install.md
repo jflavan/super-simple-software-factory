@@ -113,6 +113,39 @@ restructure: the generated blocks do not notice that a frontend moved, and a
 command pointing at a directory that no longer exists fails in a way that reads
 like a broken build.
 
+### Upgrading: a profile cannot be applied over an older stamped tree
+
+`stamp()` skips any file that already exists unless `--force` — so applying a
+profile to a repo that was installed from an earlier SSSF version leaves
+`quality.py`, `gates.py`, `utils.py`, `data_types.py`, the ADW scripts, and
+`builder/system.md` at their old contents while generation writes the three
+files above beside them anyway. The install would report a wired factory and
+wire nothing: a stale `quality.py` has no `_import_generated_blocks`, so
+`quality_blocks.py` is inert and the `echo` placeholders keep running; a stale
+`gates.py` has no `profile_gates()`, so the generated `profile_gates.py` is
+inert too; and a stale `builder/system.md` has no `{{profile_overlay}}`, so the
+overlay is never injected.
+
+The installer refuses this instead of doing it: applying `--profile` (or
+auto-detecting one) against a repo whose stamped modules predate what the
+generated files need exits non-zero and names exactly which module is stale
+and what breaks without it.
+
+The fix is `--force`:
+
+```bash
+uv run <skill>/scripts/install.py --profile dotnet-svelte --force
+```
+
+**Commit first.** `--force` does not touch only the stale modules named in the
+error — it refreshes *every* stamped file, which also overwrites
+`adws/adw_sssf_config/sssf.config.yaml` and everything under
+`adws/adw_data/prompt_engineering/`. Any hand edits to the agent roster or the
+prompts need to be committed (or otherwise preserved) before you re-run with
+`--force`, so you can diff or restore them afterward. `--doctor` is unaffected
+by all of this — it writes nothing, so it has nothing to protect, and keeps
+working against a repo it does not own even when the repo is stale.
+
 ### The `dotnet-svelte` profile
 
 Matches a repo containing both a `*.sln`/`*.slnx` and a `package.json`

@@ -18,7 +18,10 @@ Extend `adws/adw_modules/` with new low-level logic.
 | `gates.py` | validation gates over envelope claims |
 | `changes.py` | deterministic change capture: resolve the base ref, `git diff` into `context_handoff/changes.diff`, adapt the `ChangeSet` into an envelope an agent can be handed |
 | `permissions.py` | fingerprints the repo before and after every agent call; rolls back unauthorized writes and fails the phase — enforces `writes:` and `protected_files` |
-| `quality.py` | `kind="code"` phases: the lint/test/build commands an agent never needs to run, adapted to an envelope via `as_envelope` |
+| `quality.py` | the engine for `kind="code"` quality phases: runs whatever `blocks()` returns and adapts the result to an envelope via `as_envelope`. Never edit it to add a command — see `quality_blocks.py` below |
+| `quality_blocks.py` *(generated)* | this repo's real lint/test/build/typecheck commands, written by `install.py --profile` from what it found in the tree (`PLACEHOLDER_BLOCKS` — `echo` — until then). Re-probe after a restructure with `install.py --doctor` |
+| `profile_gates.py` *(generated)* | `gates.profile_gates()` — every framework's gate functions, collected for the build phase to spread in |
+| `gates_<framework>.py` *(generated, one per framework)* | the stack-specific gate functions a profile stamped, e.g. `gates_dotnet.py`, `gates_sveltekit.py` — operator-editable, never overwritten without `--force` |
 | `prompts.py` | load system/user prompt refs from config, render placeholders |
 | `session.py` | mint or join `adw_id`, maintain `agent_map.json`, create session dirs incl. `context_handoff/` |
 | `tracer.py` | append JSONL **and** insert every event into `sssf.db` as it happens |

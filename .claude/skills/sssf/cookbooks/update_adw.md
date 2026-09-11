@@ -77,7 +77,7 @@ runner did its job — so phases alone would report a green run that never passe
 its tests, in the db and the UI as well as the terminal. Pass `accepted=` and
 the exit code, the session status, and the banner are decided together.
 
-`quality.as_envelope` is the adapter: a deterministic result shaped as an envelope, so the builder cannot tell it came from code. Wire the real command in `quality.py` first — the stamped blocks are `echo` placeholders that announce themselves.
+`quality.as_envelope` is the adapter: a deterministic result shaped as an envelope, so the builder cannot tell it came from code. `quality.py` is the engine — it runs whatever `blocks()` returns and never changes. The real commands live in the generated `quality_blocks.py`; in a profiled repo, edit that file (re-run `install.py --doctor` after a restructure). Without a profile, `quality.py` falls back to `PLACEHOLDER_BLOCKS` — `echo` commands that announce themselves — until a profile is applied or `quality_blocks.py` is written by hand.
 
 Three distinctions worth keeping straight:
 

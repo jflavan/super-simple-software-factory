@@ -180,3 +180,34 @@ def test_doctor_on_an_unrecognised_repo_says_so_and_succeeds(tmp_path):
 def test_doctor_output_is_ascii(tmp_path):
     dotnet_svelte_repo(tmp_path)
     _install(tmp_path, "--doctor").stdout.encode("ascii")
+
+
+def test_a_profile_is_refused_on_a_stale_installation(tmp_path):
+    """Generating into an old stamped tree reports a wired factory and wires none."""
+    dotnet_svelte_repo(tmp_path)
+    assert _install(tmp_path).returncode == 0
+
+    # Simulate a pre-profile installation: the stamped runtime predates the
+    # symbols the generated files need.
+    quality = tmp_path / "adws" / "adw_modules" / "quality.py"
+    quality.write_text(quality.read_text().replace(
+        "_import_generated_blocks", "_old_name_for_the_same_thing"))
+
+    result = _install(tmp_path)
+    assert result.returncode != 0
+    assert "older SSSF" in result.stdout + result.stderr
+    assert "--force" in result.stdout + result.stderr
+
+
+def test_doctor_still_works_against_a_stale_installation(tmp_path):
+    """Doctor writes nothing, so it has nothing to protect - and Task 21 points
+    it at repositories it does not own."""
+    dotnet_svelte_repo(tmp_path)
+    _install(tmp_path)
+    quality = tmp_path / "adws" / "adw_modules" / "quality.py"
+    quality.write_text(quality.read_text().replace(
+        "_import_generated_blocks", "_old_name_for_the_same_thing"))
+
+    result = _install(tmp_path, "--doctor")
+    assert result.returncode == 0
+    assert "nothing was written" in result.stdout
