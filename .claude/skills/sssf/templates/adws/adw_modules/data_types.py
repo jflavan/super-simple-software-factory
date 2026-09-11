@@ -368,29 +368,30 @@ class EventRecord(BaseModel):
     ended_at: Optional[str] = None
 
 
-# ── Pi coding agent interface ────────────────────────────────────────────────
+# ── Coding-agent interface ───────────────────────────────────────────────────
 
 class AgentRequest(BaseModel):
-    """Everything one non-interactive pi run needs."""
+    """Everything one non-interactive agent turn needs, on any backend."""
 
     prompt: str
     system_prompt: str
-    model: str                      # registry pattern, resolved to provider + id
+    model: str                      # provider/model-id; how it resolves is the backend's business
     thinking: str = "medium"
-    session_id: str                 # pi --session-id: creates or continues
+    session_id: str                 # the backend's session handle; create-vs-continue is per backend
     session_dir: str
     raw_output_path: str            # JSONL stream lands here
     tools: Optional[list[str]] = None
-    extensions: list[str] = Field(default_factory=list)
+    extensions: list[str] = Field(default_factory=list)  # pi harness extensions (-e); pi-only
     cwd: str = "."                  # set from run.repo_root — the codebase root agents work in
 
 
 class UsageBreakdown(BaseModel):
     """Tokens and the dollars they cost, per component, summed over a call.
 
-    Mirrors pi's `usage` shape one-for-one so the numbers reconcile with what
-    pi itself reports: `input` EXCLUDES cache reads, which bill at their own
-    (cheaper) rate — add them to learn the size of the prompt that was sent.
+    The fields are the shared accounting schema every backend reports into;
+    each backend translates its own usage payload to fill them. `input`
+    EXCLUDES cache reads, which bill at their own (cheaper) rate — add them to
+    learn the size of the prompt that was sent.
     """
     input_tokens: int = 0
     output_tokens: int = 0
@@ -410,6 +411,11 @@ class UsageBreakdown(BaseModel):
 
     def add_turn(self, usage: dict, total_tokens: int) -> None:
         """Fold in one pi `message_end` usage object.
+
+        pi-shaped on purpose: this reads pi's key names (`input`, `cacheRead`,
+        a nested `cost` dict). Another backend's payload will not match, and
+        every lookup would silently return zero — so a backend whose usage
+        differs must translate into the fields directly rather than call this.
 
         `total_tokens` is passed in rather than re-derived: the caller already
         computes it pi's way (totalTokens, else the sum of the parts).
@@ -444,4 +450,4 @@ class AgentResult(BaseModel):
     # turn; this is how full the window is right now, which is what the
     # visualizer's context bar measures against `context_window`.
     context_tokens: int = 0
-    context_window: int = 0         # 0 when the registry declares no ceiling
+    context_window: int = 0         # 0 when the backend declares no ceiling
