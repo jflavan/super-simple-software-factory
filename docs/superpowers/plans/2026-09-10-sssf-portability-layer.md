@@ -1667,6 +1667,12 @@ def validate_agent(agent) -> list[str]:
     return []
 ```
 
+**Carried over from the Task 9 review — do this as part of this task.** `agents.py` hardcodes
+the per-agent session directory as `agent_dir / "pi_sessions"`, so a Claude Code run writes
+its session state into a directory named after the other backend. Rename it to `"sessions"`,
+which is backend-neutral and matches what the directory actually holds. It is a runtime path
+under `data_dir`, not a tracked artifact, so nothing depends on the old name.
+
 In `agents.py`, change the import on line 18 to:
 
 ```python
