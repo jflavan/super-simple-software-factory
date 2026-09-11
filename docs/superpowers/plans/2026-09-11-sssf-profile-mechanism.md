@@ -1405,7 +1405,10 @@ def test_no_runner_when_no_marker_file_exists(tmp_path):
 
 
 def test_just_is_detected_from_its_marker_file(tmp_path, monkeypatch):
-    monkeypatch.setattr(probes, "_summary", lambda runner, root: None)
+    # `(None, reason)`, not a bare None: _summary reports WHY it fell back, so
+    # a runner that ran and refused is distinguishable from one that is absent.
+    monkeypatch.setattr(probes, "_summary",
+                        lambda runner, root: (None, "just is not installed"))
     write(tmp_path, "justfile", JUSTFILE)
     name, recipes = probes.task_runner(tmp_path)
     assert name == "just"
@@ -1413,7 +1416,10 @@ def test_just_is_detected_from_its_marker_file(tmp_path, monkeypatch):
 
 
 def test_a_capitalised_justfile_counts(tmp_path, monkeypatch):
-    monkeypatch.setattr(probes, "_summary", lambda runner, root: None)
+    # `(None, reason)`, not a bare None: _summary reports WHY it fell back, so
+    # a runner that ran and refused is distinguishable from one that is absent.
+    monkeypatch.setattr(probes, "_summary",
+                        lambda runner, root: (None, "just is not installed"))
     write(tmp_path, "Justfile", JUSTFILE)
     assert probes.task_runner(tmp_path)[0] == "just"
 
@@ -4482,7 +4488,10 @@ def test_the_overlay_references_conventions_rather_than_restating_them(tmp_path)
 
 def test_the_overlay_names_the_detected_task_runner(tmp_path, monkeypatch):
     from profiles import probes
-    monkeypatch.setattr(probes, "_summary", lambda runner, root: None)
+    # `(None, reason)`, not a bare None: _summary reports WHY it fell back, so
+    # a runner that ran and refused is distinguishable from one that is absent.
+    monkeypatch.setattr(probes, "_summary",
+                        lambda runner, root: (None, "just is not installed"))
     text = _generate(tmp_path, justfile_text="test-unit:\n    dotnet test\n")
     assert "just" in text
 
