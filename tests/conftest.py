@@ -13,3 +13,8 @@ TEMPLATES_ADWS = (Path(__file__).resolve().parent.parent
 
 if str(TEMPLATES_ADWS) not in sys.path:
     sys.path.insert(0, str(TEMPLATES_ADWS))
+
+TEMPLATES = TEMPLATES_ADWS.parent          # .../skills/sssf/templates
+
+if str(TEMPLATES) not in sys.path:
+    sys.path.insert(0, str(TEMPLATES))
