@@ -36,19 +36,6 @@ THINKING_TOKENS = {
 }
 
 
-def thinking_env(level: str) -> dict[str, str]:
-    """SSSF's thinking level as Claude Code environment settings.
-
-    Claude Code has no --thinking flag, so the level becomes a token budget the
-    child process reads from its environment.
-    """
-    budget = THINKING_TOKENS.get(level)
-    if budget is None:
-        raise ValueError(f"unknown thinking level {level!r} — expected one of "
-                         f"{', '.join(THINKING_TOKENS)}")
-    return {} if budget == 0 else {"MAX_THINKING_TOKENS": str(budget)}
-
-
 def apply_thinking(env: dict[str, str], level: str) -> dict[str, str]:
     """Make `env` reflect `level`, and return it.
 
@@ -394,7 +381,7 @@ def run(request: AgentRequest, on_event: Optional[Callable[[dict], None]] = None
     session_value, resume = session_uuid(request.session_dir, request.session_id)
     cmd = build_command(request, session_value, resume)
 
-    # apply_thinking, not env.update(thinking_env(...)): the child env starts as
+    # The env is mutated in place rather than merged: the child env starts as
     # a copy of the operator's, so an inherited MAX_THINKING_TOKENS has to be
     # removed for `off` to mean off.
     env = apply_thinking(operator_env(), request.thinking)
