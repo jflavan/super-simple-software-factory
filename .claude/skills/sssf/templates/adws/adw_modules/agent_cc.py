@@ -135,6 +135,23 @@ def context_window(provider: str, model_id: str) -> int:
 SESSION_MAP_NAME = "cc_sessions.json"
 
 
+def _read_session_map(path: Path) -> dict:
+    """The session map, or {} if it does not exist yet.
+
+    A corrupt map is reported with its path: it surfaces mid-run, inside an
+    agent call, where a bare JSONDecodeError says nothing about which file to
+    look at or what to do about it.
+    """
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text())
+    except json.JSONDecodeError as error:
+        raise RuntimeError(
+            f"the Claude Code session map at {path} is not valid JSON ({error}) — "
+            f"delete it to let this agent start a fresh session") from error
+
+
 def session_uuid(session_dir: str, sssf_session_id: str) -> tuple[str, bool]:
     """Map an SSSF session id to a Claude Code UUID. Returns (uuid, resume).
 
@@ -147,12 +164,20 @@ def session_uuid(session_dir: str, sssf_session_id: str) -> tuple[str, bool]:
     under pi.
     """
     path = Path(session_dir) / SESSION_MAP_NAME
-    mapping = json.loads(path.read_text()) if path.exists() else {}
-    existing = mapping.get(sssf_session_id)
-    if existing:
+    mapping = _read_session_map(path)
+    if sssf_session_id in mapping:
+        existing = mapping[sssf_session_id]
+        if not isinstance(existing, str) or not existing.strip():
+            raise RuntimeError(
+                f"the session map at {path} holds {existing!r} for "
+                f"{sssf_session_id!r}, which is not a session id. Minting a new "
+                f"one would silently start a fresh context window and lose the "
+                f"correction this lookup exists to preserve — delete the file to reset.")
         return existing, True
     minted = str(uuid.uuid4())
     mapping[sssf_session_id] = minted
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(mapping, indent=2))
+    temp = path.with_name(path.name + ".tmp")
+    temp.write_text(json.dumps(mapping, indent=2))
+    temp.replace(path)          # atomic on POSIX and Windows
     return minted, False

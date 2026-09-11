@@ -1,5 +1,6 @@
 """The Claude Code backend: pure mappings first, subprocess wiring last."""
 
+import json
 import pytest
 import uuid as uuid_module
 
@@ -133,3 +134,41 @@ def test_two_agents_get_different_uuids(tmp_path):
     planner, _ = agent_cc.session_uuid(str(tmp_path), "sssf-abcd1234-planner-1b3c")
 
     assert builder != planner
+
+
+def test_a_corrupt_session_map_names_the_file(tmp_path):
+    (tmp_path / "cc_sessions.json").write_text("{not json")
+
+    with pytest.raises(RuntimeError, match="not valid JSON"):
+        agent_cc.session_uuid(str(tmp_path), "sssf-abcd1234-builder-9f2a")
+
+
+def test_a_corrupt_entry_fails_rather_than_silently_reissuing(tmp_path):
+    # Minting a replacement here would start a new context window without
+    # telling anyone — the precise failure this map exists to prevent.
+    (tmp_path / "cc_sessions.json").write_text('{"sssf-abcd1234-builder-9f2a": ""}')
+
+    with pytest.raises(RuntimeError, match="not a session id"):
+        agent_cc.session_uuid(str(tmp_path), "sssf-abcd1234-builder-9f2a")
+
+
+def test_a_null_entry_fails_too(tmp_path):
+    (tmp_path / "cc_sessions.json").write_text('{"sssf-abcd1234-builder-9f2a": null}')
+
+    with pytest.raises(RuntimeError, match="not a session id"):
+        agent_cc.session_uuid(str(tmp_path), "sssf-abcd1234-builder-9f2a")
+
+
+def test_the_write_leaves_no_temp_file_behind(tmp_path):
+    agent_cc.session_uuid(str(tmp_path), "sssf-abcd1234-builder-9f2a")
+
+    assert [p.name for p in tmp_path.iterdir()] == ["cc_sessions.json"]
+
+
+def test_the_map_is_readable_by_a_later_call_from_the_file_alone(tmp_path):
+    """The persistence claim, checked against the file rather than memory."""
+    minted, _ = agent_cc.session_uuid(str(tmp_path), "sssf-abcd1234-builder-9f2a")
+
+    on_disk = json.loads((tmp_path / "cc_sessions.json").read_text())
+
+    assert on_disk == {"sssf-abcd1234-builder-9f2a": minted}
