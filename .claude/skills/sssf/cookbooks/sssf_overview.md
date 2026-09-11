@@ -19,6 +19,8 @@ adws/
 ├── adw_build_review.py          build → review: is this what was asked for? (not testing)
 ├── adw_document.py              write up the work just done, from git diff vs main
 ├── adw_simple_sdlc.py           plan → build → test → review → document; commits each product
+├── adw_quality.py               no agents at all: every quality block, both tiers
+├── adw_plan_build_test_quality.py  the fast tier inside the fix loop, every tier once after it
 ├── adw_modules/                 ALL low-level logic — ADW scripts stay thin
 │   ├── data_types.py            AgentCall, PhaseParams, Phase, Envelope + one output type per agent call
 │   ├── agents.py                load_config, validate, resolve entry → interface + model + thinking
@@ -34,15 +36,18 @@ adws/
 │   ├── prompts.py, session.py, tracer.py, console.py, git_helper.py, utils.py
 └── adw_data/
     ├── prompt_engineering/{agent}/{system.md,user.md}   tracked — edit prompts HERE, never in the skill
-    │                                planner · builder · scout · reviewer · documenter
+    │   │                            planner · builder · scout · reviewer · documenter
+    │   └── profile_overlay.md       *(generated)* the stack fragment, injected wherever a
+    │                                template names {{profile_overlay}}
     ├── sessions/{adw_id}/                               gitignored runtime
     │   ├── agent_map.json       agent → coding-agent session_id + model
     │   ├── context_handoff/     the one place agents write files for the agents that follow
+    │   │   └── quality/<seq>_<block>/command.log   written by CODE: one per quality block
     │   └── {agent}/{prompts/, raw_output.jsonl, envelope.json}
     └── sssf.db                  gitignored SQLite trace db the visualizer polls
 ```
 
-**Two backends.** `coding_agent: pi` (default model `gemini-3.6-flash`, thinking `medium`) runs Pi; `coding_agent: claude_code` runs Claude Code. Both implement the same interface — `run`, `resolve_model`, `context_window`, `validate_agent`, `ToolCallTracker` — so `agents.py` dispatches without either an ADW or an orchestrator ever branching on which one is in play.
+**Two backends.** `coding_agent: pi` (default model `google/gemini-3.6-flash` — always written `provider/model-id`, thinking `medium`) runs Pi; `coding_agent: claude_code` runs Claude Code. Both implement the same interface — `run`, `resolve_model`, `context_window`, `validate_agent`, `ToolCallTracker` — so `agents.py` dispatches without either an ADW or an orchestrator ever branching on which one is in play.
 
 ## The phase model
 

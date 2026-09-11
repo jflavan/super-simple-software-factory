@@ -25,20 +25,22 @@ Run from the **target repo root** — the cwd is where everything lands. If the 
 | `justfile` | `templates/justfile` | yes — starter recipes: `just demo`, the workflows, the trace reads, `just obs` |
 | `adws/adw_data/sessions/`, `adws/adw_data/sssf.db` | created at runtime | no — gitignored |
 
+That is the stamped half only. A profiled install also **generates** three files and stamps one gate module per framework — see "Stack profiles" below for the full list, because those are the files an operator is most likely to go looking for and not find here.
+
 The two `*_engineering` dirs mirror the two config keys of the same name: `prompt_engineering` is what an agent is told, `harness_engineering` is what its harness can do. Both are yours the moment they are stamped. Edit them in `adws/adw_data/`, never back inside the skill.
 
 `harness_engineering/` ships with `subagents.ts` — the pi extension backing `subagent_create` / `_continue` / `_list` / `_remove`, wired to the planner and scout in the starter roster.
 
 ## Idempotency
 
-Re-running is safe. `install.py` skips **every** file that already exists — your config, your prompts, and previously stamped code alike — and reports what it skipped, so a second run doubles as a drift check. To refresh stamped code (`adw_modules/`, the starter `adw_*.py`) to the skill's current version, run with `--force` — but know that `--force` overwrites ALL existing stamped files, including `sssf.config.yaml` and `prompt_engineering/`, so commit or back up user-owned edits first.
+Re-running is mostly safe. `install.py` skips every **stamped** file that already exists — your config, your prompts, and previously stamped code alike — and reports what it skipped, so a second run doubles as a drift check. The three **generated** files are the exception and are rewritten on every profiled run, deliberately: they describe the repo as it is now, so preserving a stale copy of them would be the wrong kindness. A re-run can also *refuse* outright — see "Upgrading" below. To refresh stamped code (`adw_modules/`, the starter `adw_*.py`) to the skill's current version, run with `--force` — but know that `--force` overwrites ALL existing stamped files, including `sssf.config.yaml` and `prompt_engineering/`, so commit or back up user-owned edits first.
 
 ## Post-install checklist
 
 1. **Env** — `cp .env.sample .env`, then set the keys your roster actually needs: `OPENROUTER_API_KEY` (and friends) for `coding_agent: pi` agents, `ANTHROPIC_API_KEY` for `coding_agent: claude_code` agents. The starter roster runs `pi` throughout, so only the Pi key is required out of the box.
 2. **The coding agent is installed and on PATH** — `pi --version` for any `pi` agent, `claude --version` for any `claude_code` agent. Set `PI_PATH` / `CLAUDE_CODE_PATH` in `.env` if the binary is not found under its default name.
 3. **The model resolves.** For `pi`, the config's default `gemini-3.6-flash` must be a registered id in `~/.pi/agent/models.json` — check with `pi --list-models` or read the file directly. For `claude_code`, the model is written `anthropic/<model-id>` and only its shape and provider are validated — there is no catalog to probe. See `references/config.md` for both.
-4. **Gitignore** — `install.py` appends `adws/adw_data/sessions/`, `adws/adw_data/sssf.db*`, and `.env` for you; confirm they landed. All three are runtime or secrets and must never be committed.
+4. **Gitignore** — `install.py` appends five entries for you; confirm they landed: `adws/adw_data/sessions/`, `adws/adw_data/sssf.db*`, `.env`, `__pycache__/`, and `*.pyc`. The first three are runtime or secrets. The last two matter because the ADWs are Python and importing `adw_modules` writes bytecode next to it — chains ending in a commit phase call `git add -A`, and without those entries a stamped repo commits its own `.pyc` files.
 5. **Git repo** — ADWs that end in a commit phase call `git_helper.commit_all`, which raises if the cwd is not a git repository. Run `git init` and make a first commit before using `adw_plan_build.py`, `adw_plan_build_test.py`, or `adw_simple_sdlc.py`. `adw_document.py` needs one too: it measures the change with `git diff` against a base ref (`main` by default, `--base` to override).
 6. **Windows: force UTF-8 on your console.** The run banner prints box-drawing and arrow
    characters. A default Windows console is cp1252 and cannot encode them, and the failure is
@@ -67,9 +69,11 @@ If the smoke test fails, fix it before composing chains — every multi-agent AD
 
 ## Stack profiles
 
-A bare install leaves `quality.py` on its `PLACEHOLDER_BLOCKS` — every check is an
+Without a profile, `quality.py` stays on its `PLACEHOLDER_BLOCKS` — every check is an
 `echo` that exits 0 and says out loud that it is fake. A **profile** replaces them
-with this repo's real commands, discovered by probing the tree.
+with this repo's real commands, discovered by probing the tree. A bare install is not
+the same as `--no-profile`: with no flag at all the installer auto-detects, and the
+placeholders survive only when nothing matches.
 
 ```bash
 uv run <skill>/scripts/install.py                       # auto-detect
@@ -126,10 +130,20 @@ wire nothing: a stale `quality.py` has no `_import_generated_blocks`, so
 inert too; and a stale `builder/system.md` has no `{{profile_overlay}}`, so the
 overlay is never injected.
 
-The installer refuses this instead of doing it: applying `--profile` (or
-auto-detecting one) against a repo whose stamped modules predate what the
+The installer refuses the part it can see: applying `--profile` (or
+auto-detecting one) against a repo whose stamped **modules** predate what the
 generated files need exits non-zero and names exactly which module is stale
-and what breaks without it.
+and what breaks without it. The check is three symbols in three files —
+`_import_generated_blocks` in `quality.py`, `profile_gates` in `gates.py`,
+`claimed_files` in `utils.py` — chosen because a symbol is what the generated
+file actually needs, and there is no version to compare.
+
+**It does not cover your prompts.** A `builder/system.md` that predates
+`{{profile_overlay}}` passes this check, the install succeeds, it reports a
+wired factory, and the overlay is generated and then silently never injected —
+the third breakage listed above is the one the guard cannot see. Diff
+`adws/adw_data/prompt_engineering/` against the skill's
+`templates/prompt_engineering/` after any upgrade.
 
 The fix is `--force`:
 
@@ -150,7 +164,8 @@ working against a repo it does not own even when the repo is stale.
 
 Matches a repo containing both a `*.sln`/`*.slnx` and a `package.json`
 declaring `@sveltejs/kit`. `templates/profiles/dotnet_svelte/profile.yaml`
-holds nothing but the three fields every profile has:
+holds nothing but three fields, of which only `frameworks` is required —
+`name` falls back to the directory name and `description` defaults to empty:
 
 ```yaml
 name: dotnet-svelte
@@ -160,12 +175,40 @@ frameworks: [dotnet, sveltekit]
 
 Everything else lives in the two frameworks it names.
 
+## Adding a profile
+
+If every technology in the stack already has a framework module, a new stack is
+**one file and no registration**. Make a directory under `templates/profiles/`
+and put a `profile.yaml` in it, naming only frameworks that are registered
+today — `dotnet` and `sveltekit`:
+
+```yaml
+name: sveltekit-only
+description: A SvelteKit front end with no .NET behind it.
+frameworks: [sveltekit]
+```
+
+`registry._discover` globs `*/profile.yaml`, so it is visible to `install.py`
+and to `--profile sveltekit-only` immediately. Nothing imports it, nothing
+lists it, and no shared file changes. That is the cheap path, and it is the one
+to check for before writing any Python.
+
+**Naming a framework that is not registered breaks every install, not just
+this profile.** `_discover` constructs a `CompositeProfile` for *every*
+`*/profile.yaml` it finds, and `install.py` calls `registry.names()` while it
+is still building its `--help` text — so one bad file exits with
+`unknown framework 'vue' - available: dotnet, sveltekit` before any flag is
+parsed, taking `--doctor` and `--no-profile` down with it. If the stack needs
+a technology nothing implements yet, write the framework module first: that is
+"Adding a framework" below, and the YAML is its last step, not its first.
+
 ## Adding a framework
 
 A **framework** owns one technology; a **profile** is a YAML file naming the
 frameworks a stack is made of. That split is why pairing .NET with a different
-frontend costs one new file, not a fork of the existing profile — Task 19 built
-a third framework end to end in 64 lines and changed no shared module.
+frontend costs one new file, not a fork of the existing profile — the acceptance
+test for the design builds a third framework end to end in a 64-line module and
+changes no shared module, only the two registration lines of step 4 below.
 
 To add one — Angular, React, Django, whatever:
 
@@ -189,9 +232,15 @@ To add one — Angular, React, Django, whatever:
 5. **`templates/profiles/<profile_dir>/profile.yaml`** — name it alongside
    whatever it pairs with (or alone, for a single-framework profile).
 
-No core module changes, and no other framework's file changes. A framework
-must never import another framework: shared work goes through `probes` and
-`emit` only.
+Step 4 is the only shared file a framework touches, and it is two lines in a
+registration tuple. Nothing in `composite.py`, `registry.py`, `probes.py`,
+`emit.py`, or `facts.py` changes, and no other framework's file changes — *that*
+is the claim the design makes, and it is the one the acceptance test pins. A
+framework must never import another framework: shared work goes through `probes`
+and `emit` only.
+
+Adding a **profile** touches no shared file at all, not even a registration
+tuple — see "Adding a profile" above.
 
 `tests/fake_framework.py` is a worked example — a third framework ("vue",
 standing in for the real next profile) built from `probes`, `emit`, and the

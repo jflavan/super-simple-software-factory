@@ -13,11 +13,19 @@ defaults:
   thinking: medium
   harness_engineering: []
   tools: [read, bash, edit, write, grep, find, ls]
+  protected_files:                      # no agent may edit the machinery that grades it
+    - adws/adw_modules/
+    - adws/adw_sssf_config/
+    - adws/adw_*.py
   data_dir: adws/adw_data
 
 observability:
   db: adws/adw_data/sssf.db
   poll_ms: 500
+
+doc_policy:                             # optional; empty means the gate never fires
+  - when: "apps/api/**/Auth*.cs"
+    require: ["docs/AUTH.md"]
 
 agents:
   - name: planner
@@ -30,10 +38,16 @@ agents:
       system: adws/adw_data/prompt_engineering/planner/system.md
       user: adws/adw_data/prompt_engineering/planner/user.md
     harness_engineering:
-      - json-enforcer
-    tools:
+      - adws/adw_data/harness_engineering/subagents.ts   # a PATH, not a name
+    tools:                                # an extension's tools MUST be named here
       - read
       - bash
+      - subagent_create                   # ...or the extension loads and pi
+      - subagent_continue                 #    filters its tools out, silently
+      - subagent_list
+      - subagent_remove
+    writes:                               # the boundary; omit for unrestricted
+      - specs/
 ```
 
 ## Fields
@@ -43,7 +57,7 @@ agents:
 | Field | Type | Meaning |
 |---|---|---|
 | `coding_agent` | `pi` \| `claude_code` | Which interface runs the agent. Both are real backends behind the same interface in `agents.py` — `pi` (default) runs the Pi agent, `claude_code` runs Claude Code. |
-| `model` | string | Model id. For `pi`, any id registered in `~/.pi/agent/models.json`, e.g. `google/gemini-3.6-flash`. For `claude_code`, always `anthropic/<model-id>`, e.g. `anthropic/claude-opus-5` — there is no catalog to probe the way pi's `--list-models` provides one, so only the shape (`provider/model-id`) and the provider (`anthropic`) are validated, not that the id itself exists. Default `gemini-3.6-flash`. |
+| `model` | string | Model id. For `pi`, any id registered in `~/.pi/agent/models.json`, e.g. `google/gemini-3.6-flash`. For `claude_code`, always `anthropic/<model-id>`, e.g. `anthropic/claude-opus-5` — there is no catalog to probe the way pi's `--list-models` provides one, so only the shape (`provider/model-id`) and the provider (`anthropic`) are validated, not that the id itself exists. Default `google/gemini-3.6-flash` — written in full, like every model id. |
 | `thinking` | enum | Reasoning effort — see below. Default `medium`. |
 | `color` | hex string | Lane color for every agent that does not set its own. Default empty — the visualizer falls back to its own palette. |
 | `harness_engineering` | list[string] | Pi extension file paths. Pi-only: a `claude_code` agent that sets this fails `agents.validate()`, before anything spawns. |
@@ -180,7 +194,7 @@ agents:
   - name: planner
     writes: [specs/]
   - name: documenter
-    writes: [app_docs/, docs/, "**/*.md", "*.md"]
+    writes: [app_docs/, docs/, "**/*.md"]
 ```
 
 **The session runtime under `data_dir` is always writable, for every agent.**
@@ -276,7 +290,7 @@ QualityCheckSpec(
 
 ## Harness engineering
 
-`harness_engineering` entries are pi extension **file paths**, passed through as `pi -e <path>`, one flag per entry, scoped to that agent only. This is where per-agent harness changes live — e.g. an output-tightening extension for an agent that keeps wrapping its envelope in prose. The starter roster ships with none.
+`harness_engineering` entries are pi extension **file paths**, passed through as `pi -e <path>`, one flag per entry, scoped to that agent only. This is where per-agent harness changes live — e.g. an output-tightening extension for an agent that keeps wrapping its envelope in prose. The starter roster ships one, `adws/adw_data/harness_engineering/subagents.ts`, wired to `planner` and `scout`; every other agent leaves the key off. Note the shape: a repo-relative **path**, never a bare extension name.
 
 **This is a pi-only mechanism.** It has no Claude Code equivalent, and that is enforced,
 not just undocumented: a `claude_code` agent that sets `harness_engineering` fails

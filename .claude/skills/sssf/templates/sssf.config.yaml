@@ -152,7 +152,8 @@ agents:
       - app_docs/                  # not a line in a prompt the model may drift from.
       - docs/                      # Markdown anywhere, because docs live next to the
       - "**/*.md"                  # code they describe as often as in a docs folder.
-      - "*.md"
+                                   # `**/` matches ZERO directories too, so this already
+                                   # covers README.md at the root — no bare "*.md" needed.
     tools:                         # reads the diff and the code; writes/edits documentation only
       - read
       - grep

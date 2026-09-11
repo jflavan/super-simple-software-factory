@@ -20,6 +20,24 @@ OUTPUT_TYPES = {"planner": "PlanOutput", "builder": "BuildOutput",
                 "scout": "ScoutOutput",
                 "reviewer": "ReviewOutput", "documenter": "DocumentOutput"}
 
+# The gate list each output type earns, matching what the shipped ADWs use.
+# A phase that CHANGES the repo gets the full set: diff_matches_claims checks
+# what it said it touched, doc_policy checks that the docs the roster ties to
+# those paths moved too, and profile_gates() splats in whatever the stack
+# profile generated. Omitting the last two is how a generated ADW ends up
+# quietly weaker than every workflow shipping beside it.
+WRITES_TO_THE_REPO = """[gates.diff_matches_claims, gates.doc_policy,
+                                            *gates.profile_gates()]"""
+GATES = {"PlanOutput": "[gates.artifacts_exist, gates.files_non_empty]",
+         "BuildOutput": WRITES_TO_THE_REPO,
+         "ScoutOutput": "[gates.artifacts_exist]",
+         "ReviewOutput": "[gates.artifacts_exist, gates.verdict_consistent]",
+         "DocumentOutput": "[gates.artifacts_exist, gates.files_non_empty]"}
+# An unknown agent returns GenericOutput, and nothing can be assumed about what
+# it claims - so it gets the one gate that is always safe to check. Sharpen it
+# by hand once you know what that agent's envelope actually declares.
+DEFAULT_GATES = "[gates.artifacts_exist]"
+
 HEADER = '''#!/usr/bin/env -S uv run
 # /// script
 # dependencies = ["pydantic", "python-dotenv", "pyyaml"]
@@ -52,7 +70,7 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
 
     previous = None
 {phases}
-    return 0 if run.succeeded else 1
+    return run.finish()
 
 
 if __name__ == "__main__":
@@ -69,7 +87,7 @@ PHASE = '''    # TODO: replace this description — say what THIS phase does and
                                description="Run {agent} over the request and hand its envelope on")) as ph:
         previous = ph.call(AgentCall(output_type={output_type}, prompt=prompt,
                                      previous=previous,
-                                     gates=[gates.artifacts_exist]))
+                                     gates={gate_list}))
 '''
 
 
@@ -91,7 +109,8 @@ def main() -> int:
     for agent, output_type in zip(agent_names, types):
         seen[agent] = seen.get(agent, 0) + 1
         phase_name = agent if seen[agent] == 1 else f"{agent}_{seen[agent]}"
-        phases.append(PHASE.format(name=phase_name, agent=agent, output_type=output_type))
+        phases.append(PHASE.format(name=phase_name, agent=agent, output_type=output_type,
+                                   gate_list=GATES.get(output_type, DEFAULT_GATES)))
 
     body = HEADER.format(
         title=args.name.replace("_", " ").title(),
@@ -107,7 +126,11 @@ def main() -> int:
         print(f"{dest} already exists — use --force to overwrite")
         return 1
     dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_text(body)
+    # encoding and newline are both pinned: the default is the locale codec,
+    # which on a Windows console is cp1252 - and an em dash written as cp1252
+    # into a .py file with no encoding declaration is a SyntaxError the first
+    # time anyone runs the ADW this script just generated.
+    dest.write_text(body, encoding="utf-8", newline="\n")
     print(f"wrote {dest}")
     print("next: replace each phase description — a generated one says nothing, "
           "and the description is the only intent the trace ever shows")

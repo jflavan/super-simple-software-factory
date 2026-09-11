@@ -37,8 +37,11 @@ Gates are callables over the finished envelope — `gate(envelope, run) -> GateR
 
 ```python
         build = ph.call(AgentCall(output_type=BuildOutput, prompt=prompt, previous=plan,
-                                  gates=[gates.artifacts_exist, gates.diff_matches_claims]))
+                                  gates=[gates.diff_matches_claims, gates.doc_policy,
+                                         *gates.profile_gates()]))
 ```
+
+**A call that changes the repo carries two named gates and a splat, not one gate.** `gates.doc_policy` is configured rather than coded — it reads the `doc_policy:` rules out of `sssf.config.yaml` and fails when a changed file obliges a document that did not change. `gates.profile_gates()` **splats** in whatever the stack profile generated into `adws/adw_modules/profile_gates.py`. Both are no-ops when nothing is configured and nothing was generated, and every `BuildOutput` call in every shipped ADW carries both. An ADW that leaves them off runs in a profiled repo with the stack gates silently unenforced.
 
 On violations the harness does **not** restart the agent — it sends the violation list back into the **same session** as a correction, bounded by that phase's `retries`. Both backends preserve the context window for this: pi's `--session-id` creates-or-continues, and `agent_cc.py` tracks its own session map and issues `--resume`. Every gate result is traced to the `gate_results` table. Exhausting the retries raises `GateFailure` and fails the phase.
 
@@ -54,8 +57,9 @@ MAX_FIX_LOOPS = 3
     test = None
     for i in range(1, MAX_FIX_LOOPS + 1):
         with run.phase(PhaseParams(name=f"test_{i}", kind="code", owner="quality",
-                                   description="Run the suite — a known command, so code runs it")) as ph:
-            test = quality.run_tests(run)          # QualityResult, not an envelope
+                                   description="Run the fast tier — known commands, so code runs "
+                                               "them and no agent has to rediscover them")) as ph:
+            test = quality.run_tests(run)          # FAST tier only. QualityResult, not an envelope
             ph.log(passed=test.passed, artifacts=", ".join(test.artifacts))
 
         if test.passed:
@@ -64,8 +68,9 @@ MAX_FIX_LOOPS = 3
         with run.phase(PhaseParams(name=f"fix_{i}", kind="agent", owner="builder", retries=1,
                                    description="Repair what the suite reported, from its verbatim output")) as ph:
             previous = ph.call(AgentCall(output_type=BuildOutput, prompt=prompt,
-                                         previous=quality.as_envelope(test, "tests"),
-                                         gates=[gates.diff_matches_claims]))
+                                         previous=quality.as_envelope(test, "fast checks"),
+                                         gates=[gates.diff_matches_claims, gates.doc_policy,
+                                                *gates.profile_gates()]))
 
     return run.finish(accepted=test is not None and test.passed,
                       reason=f"the suite still failed after {MAX_FIX_LOOPS} fix attempt(s)")
@@ -77,7 +82,19 @@ runner did its job — so phases alone would report a green run that never passe
 its tests, in the db and the UI as well as the terminal. Pass `accepted=` and
 the exit code, the session status, and the banner are decided together.
 
-`quality.as_envelope` is the adapter: a deterministic result shaped as an envelope, so the builder cannot tell it came from code. `quality.py` is the engine — it runs whatever `blocks()` returns and never changes. The real commands live in the generated `quality_blocks.py`; in a profiled repo, edit that file (re-run `install.py --doctor` after a restructure). Without a profile, `quality.py` falls back to `PLACEHOLDER_BLOCKS` — `echo` commands that announce themselves — until a profile is applied or `quality_blocks.py` is written by hand.
+`quality.as_envelope` is the adapter: a deterministic result shaped as an envelope, so the builder cannot tell it came from code. `quality.py` is the engine — it runs whatever `blocks()` returns and never changes. The real commands live in the generated `quality_blocks.py`; in a profiled repo, edit that file (re-run `install.py --doctor` after a restructure), knowing the next profiled install overwrites it. Without a profile, `quality.py` falls back to `PLACEHOLDER_BLOCKS` — `echo` commands that announce themselves — until a profile is applied or `quality_blocks.py` is written by hand.
+
+**The tier is what makes this loop affordable.** `quality.run_tests(run)` runs only the `fast` blocks, and `quality.run_quality(run)` runs every tier. Slow work — Docker, Testcontainers, an integration suite — is tagged `full` and belongs in exactly one phase *after* the loop, the way `adw_plan_build_test_quality.py` does it:
+
+```python
+    # ...the bounded loop above ends, then ONCE:
+    with run.phase(PhaseParams(name="quality", kind="code", owner="quality",
+                               description="Run every tier once, as final verification")) as ph:
+        checked = quality.run_quality(run)
+        ph.log(passed=checked.passed, artifacts=", ".join(checked.artifacts))
+```
+
+Asking for a tier that has no blocks in it **raises** — `run_tests` will not report green on an empty command list, because a green loop followed by a commit is the exact failure this is built to prevent. If you tag everything `full`, the first run of your loop stops and tells you so. Each block's full stdout and stderr land at `context_handoff/quality/<seq>_<name>/command.log`, which is where to look when a one-line failure is not enough.
 
 Three distinctions worth keeping straight:
 

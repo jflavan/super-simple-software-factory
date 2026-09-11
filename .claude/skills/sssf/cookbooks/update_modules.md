@@ -27,7 +27,7 @@ Extend `adws/adw_modules/` with new low-level logic.
 | `tracer.py` | append JSONL **and** insert every event into `sssf.db` as it happens |
 | `console.py` | the rich stdout reporter — every line printed is ALSO traced as a `log` event (`{message, level}`) so the terminal and the swim-lane UI tell the same story |
 | `git_helper.py` | branch, status, diff, commit — the raw plumbing `changes.py` composes |
-| `utils.py` | safe subprocess env, logging, `resolve_prompt` |
+| `utils.py` | safe subprocess env, logging, `resolve_prompt` — **and the shared path layer**: `glob_to_regex`, `path_matches`, `repo_relative`, `claimed_files`, `read_text(path, max_bytes)`. `writes:`, `protected_files`, `doc_policy`, and every stack gate all match paths through here. A gate author who reimplements `path_matches` gets the trailing-slash and backslash-folding rules subtly wrong |
 
 ## Never `print()`
 
@@ -98,6 +98,29 @@ Rules that keep gates honest:
 A gate that returns a plain `list[str]` of violations still works — the harness adapts it — but it records no evidence for the items that passed, so prefer a `GateReport`.
 
 Reusable gates live in `gates.py`; genuine one-offs can be defined inline at the ADW call site and passed in `gates=[...]`.
+
+### A gate that belongs to a stack
+
+A gate about a *technology* — "an EF Core migration is three files", "the CSP
+names every origin the app loads from" — does not belong in `gates.py`. It goes
+in `templates/profiles/gates/gates_<framework>.py` in the skill, and a profiled
+install stamps it into `adw_modules/` and wires it into the generated
+`profile_gates.py`. Three things follow from that, and all three bite:
+
+- **Imports are relative.** The file is stamped into a target repo's package, so
+  `from .data_types import GateReport`, never `from adw_modules.data_types`.
+- **Use the shared helpers.** `claimed_files(envelope, run)` gives the repo-relative
+  paths the envelope declared; `read_text(path, max_bytes=...)` reads a file without
+  exploding on a binary or a 40MB lockfile, and without an encoding crash on Windows.
+- **Durability is split, and it is not intuitive.** The stamped `gates_<framework>.py`
+  is yours — it is skipped on re-install like any other stamped module. The generated
+  `profile_gates.py` that wires it is **not**: deleting a line there turns a gate off
+  until the next profiled install puts it back. A permanent change belongs in the
+  framework module's `gate_wiring()`, in the skill.
+
+A gate is wired by a `GateWiring` from the framework's `gate_wiring()` — see
+`templates/profiles/facts.py`, which validates the rendered call expression with
+`ast.parse` so a malformed one fails at generation rather than at ADW runtime.
 
 ## Before you finish
 

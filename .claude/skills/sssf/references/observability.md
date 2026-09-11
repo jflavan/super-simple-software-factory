@@ -16,7 +16,7 @@ Location comes from `observability.db` in `sssf.config.yaml`, default `adws/adw_
 |---|---|
 | `phase_start` | a `run.phase(...)` block is entered |
 | `agent_start` | a coding agent is spawned or resumed for `ph.call(...)` |
-| `tool_call` | a tool (`read`, `bash`, `edit`, `write`) returns — **one event per real call**, named `bash: ls -la src`, payload `{tool, tool_call_id, args, result_snippet, ok, duration_ms, agent}` |
+| `tool_call` | **two producers, two payloads.** An agent's tool (`read`, `bash`, `edit`, `write`) returns — one event per real call, named `bash: ls -la src`, payload `{tool, tool_call_id, args, result_snippet, ok, duration_ms, agent}`. A quality block finishes — one event per block, named `quality:<block>`, payload `{area, operation, cwd, tier, command, returncode, passed, output_artifact}`. A consumer reading `tool_call` rows has to branch on which shape it got; neither payload's keys are present in the other |
 | `handoff` | an envelope crosses from one agent to the next |
 | `gate_pass` | a gate found no failed checks — payload carries `attempt`, `checks` (the evidence), and an empty `violations` |
 | `gate_fail` | a gate found at least one failed check — payload carries `attempt`, `checks`, and `violations` |
@@ -129,7 +129,7 @@ agent_sessions (                   -- the queryable mirror of agent_map.json
 );
 ```
 
-**A hung agent emits nothing**, which is exactly when you need its pid: no events, no tokens, no output to read. `processes` is the only table that can answer "what is this run running, and how do I stop it" — `just procs <adw_id>` lists what is live, `just kill <adw_id>` stops children before the parent, and both verify the recorded `command` still matches the pid before signalling it. A killed run finalizes its own trace: SIGTERM and SIGINT are turned into `SystemExit` in `session.ensure`, so the session lands on `fail` with its process rows closed instead of reading `running` forever.
+**A hung agent emits nothing**, which is exactly when you need its pid: no events, no tokens, no output to read. `processes` is the only table that can answer "what is this run running, and how do I stop it" — `just procs <adw_id>` lists what is live. There is no `just kill` in the stamped `justfile` (it is one of the extras on the `example` branch), so read the pids out of `adw_trace.py processes` and signal them yourself, children before the parent, verifying each recorded `command` still matches the pid first because pids get recycled. A killed run finalizes its own trace: SIGTERM and SIGINT are turned into `SystemExit` in `session.ensure`, so the session lands on `fail` with its process rows closed instead of reading `running` forever.
 
 **Derived, never stored:** phase durations (`ended_at − started_at`), session phase-progress (query `phases` by `adw_id`), lane layout (`kind` + `owner`).
 
