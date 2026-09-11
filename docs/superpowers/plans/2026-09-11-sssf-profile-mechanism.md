@@ -995,6 +995,25 @@ def test_a_generation_report_lists_what_it_could_not_resolve():
 
 def test_framework_facts_is_a_plain_model_any_framework_can_extend():
     assert issubclass(FrameworkFacts, BaseModel)
+
+
+def test_the_block_vocabulary_matches_the_stamped_runtime():
+    """A generator must not be able to emit a value the runtime will reject.
+
+    `facts.py` is installer-side and `data_types.py` is stamped into the target
+    repo, so the two cannot share a definition without coupling the installer to
+    the runtime tree. They can be pinned to each other, which is what this does:
+    the day someone adds an operation to one and not the other, a generated
+    block becomes a pydantic error inside an ADW run instead of here.
+    """
+    from typing import get_args
+
+    from adw_modules.data_types import QualityOperation as RuntimeOperation
+    from adw_modules.data_types import QualityTier as RuntimeTier
+    from profiles.facts import QualityOperation, QualityTier
+
+    assert set(get_args(QualityOperation)) == set(get_args(RuntimeOperation))
+    assert set(get_args(QualityTier)) == set(get_args(RuntimeTier))
 ```
 
 - [ ] **Step 3: Run the test to verify it fails**
@@ -1030,6 +1049,7 @@ anything a framework learned lives in its own FrameworkFacts subclass under
 from __future__ import annotations
 
 from pathlib import PurePosixPath
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -1088,6 +1108,10 @@ class ProfileFacts(BaseModel):
         return self.frameworks[name]
 
 
+QualityOperation = Literal["lint", "typecheck", "build", "test"]
+QualityTier = Literal["fast", "full"]
+
+
 class QualityBlock(BaseModel):
     """One block the generator decided to emit, plus WHY it chose that command.
 
@@ -1097,11 +1121,14 @@ class QualityBlock(BaseModel):
     """
 
     name: str
-    area: str
-    operation: str
+    area: Literal["frontend", "backend"]
+    # Typed against the same values QualityCheckSpec accepts. An untyped string
+    # here would let a framework emit a bad operation that nothing rejects until
+    # the GENERATED file is imported at ADW runtime, a whole install later.
+    operation: QualityOperation
     argv: list[str]
     cwd: str = "."
-    tier: str = "fast"
+    tier: QualityTier = "fast"
     timeout_seconds: int = 120
     source: str = ""
 
@@ -1699,7 +1726,7 @@ from profiles.facts import Frontend, GateWiring, ProfileFacts, QualityBlock
 
 SCRIPTS = [
     ("check", ["check-{name}", "check-frontend"], "typecheck", "check"),
-    ("test", ["test-{name}"], "build", "test"),
+    ("test", ["test-{name}"], "test", "test"),
     ("build", ["build-{name}"], "build", "build"),
 ]
 
@@ -2394,12 +2421,12 @@ def blocks(facts: DotnetFacts, repo: ProfileFacts) -> tuple[list[QualityBlock], 
             # `test-unit` meant all of them, and running it once per project
             # would run the same suite N times.
             emitted.append(QualityBlock(name=block_name, area="backend",
-                                        operation="build", argv=argv, tier=tier,
+                                        operation="test", argv=argv, tier=tier,
                                         timeout_seconds=timeout, source=source))
         elif projects:
             for project in projects:
                 emitted.append(QualityBlock(
-                    name=f"test-{project.name}", area="backend", operation="build",
+                    name=f"test-{project.name}", area="backend", operation="test",
                     argv=["dotnet", "test", project.path], tier=tier,
                     timeout_seconds=timeout, source=f"project role {role}"))
         else:
@@ -2622,7 +2649,7 @@ CSP_MARKERS = ("csp", "content-security-policy")
 SCRIPTS = [
     ("check", ["check-{name}", "check-frontend"], "typecheck", "check"),
     ("lint", ["lint-{name}", "lint-frontend"], "lint", "lint"),
-    ("test", ["test-{name}", "test-frontend"], "build", "test"),
+    ("test", ["test-{name}", "test-frontend"], "test", "test"),
     ("build", ["build-{name}", "build-frontend"], "build", "build"),
 ]
 
@@ -4952,7 +4979,7 @@ OVERLAY = ""                # nor any prompt guidance
 MARKER = "vue"
 
 SCRIPTS = [
-    ("test", ["test-{name}"], "build", "test"),
+    ("test", ["test-{name}"], "test", "test"),
     ("build", ["build-{name}"], "build", "build"),
 ]
 
