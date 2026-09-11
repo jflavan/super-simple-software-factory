@@ -205,22 +205,26 @@ def build_command(request: AgentRequest, session_uuid_value: str,
 
     Pure and separately testable: everything that decides WHAT runs lives here,
     so `run` is left with only the streaming.
+
+    Flag ORDER is load-bearing. `--allowedTools` is variadic (`<tools...>`), so
+    it swallows every bare token after it — including the trailing positional
+    prompt, which leaves `--print` with no input and exits 1. It therefore goes
+    early, and a scalar flag and its value always sit between it and the prompt.
     """
     _, model_id = resolve_model(request.model)
-    cmd = [
-        CLAUDE_PATH, "-p",
-        "--output-format", "stream-json", "--verbose",
-        "--model", model_id,
-        "--append-system-prompt", request.system_prompt,
-        "--permission-mode", "acceptEdits",
-    ]
-    cmd += ["--resume", session_uuid_value] if resume else ["--session-id", session_uuid_value]
+    cmd = [CLAUDE_PATH, "-p", "--output-format", "stream-json", "--verbose"]
     tools = allowed_tools(request.tools)
     # `is not None`, not a truthiness test: None means "every tool" and an empty
     # list means "no tools", and `if tools:` collapses those two opposites into
     # the same branch — handing a deliberately tool-less agent the full set.
     if tools is not None:
         cmd += ["--allowedTools", ",".join(tools)]
+    cmd += [
+        "--model", model_id,
+        "--append-system-prompt", request.system_prompt,
+        "--permission-mode", "acceptEdits",
+    ]
+    cmd += ["--resume", session_uuid_value] if resume else ["--session-id", session_uuid_value]
     cmd.append(request.prompt)
     return resolve_argv(cmd)
 
@@ -362,7 +366,7 @@ def validate_agent(agent) -> list[str]:
         problems.append(
             f"agent {agent.name!r}: harness_engineering is a pi extension mechanism "
             f"with no Claude Code equivalent ({', '.join(agent.harness_engineering)}) "
-            f"— remove it, or run this agent on coding_agent: pi")
+            f"- remove it, or run this agent on coding_agent: pi")
     # An agent allowed nothing cannot act. config.md already says an empty list
     # "is not 'all tools' — it is a tool-less agent, and it will stall", so say
     # so at validation rather than spawning something that cannot work. Omitting

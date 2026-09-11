@@ -250,6 +250,37 @@ def test_an_empty_tool_list_is_not_the_same_as_no_tools_key():
     assert "--allowedTools" in none_at_all
 
 
+VARIADIC_FLAGS = ("--allowedTools",)
+
+
+@pytest.mark.parametrize("tools", [["read", "bash"], None, ["read"]])
+def test_no_variadic_flag_immediately_precedes_the_prompt(tools):
+    """A variadic flag swallows every bare token after it — including the prompt.
+
+    `--allowedTools` is documented `<tools...>`, so placing it last leaves
+    `--print` with no input and the CLI exits 1. This is not hypothetical: it
+    is how the backend failed on its first real run against a repository.
+    """
+    cmd = agent_cc.build_command(_request(tools=tools),
+                                 "11111111-2222-3333-4444-555555555555", resume=False)
+
+    assert cmd[-1] == "do the thing", "the prompt must remain the final argument"
+    for flag in VARIADIC_FLAGS:
+        if flag in cmd:
+            assert cmd.index(flag) < len(cmd) - 3, (
+                f"{flag} is variadic and too close to the trailing prompt — "
+                f"a scalar flag and its value must separate them")
+
+
+def test_the_prompt_is_preceded_by_a_scalar_flag_value():
+    """Whatever sits before the prompt must be a flag's VALUE, not a flag."""
+    cmd = agent_cc.build_command(_request(), "11111111-2222-3333-4444-555555555555",
+                                 resume=False)
+
+    assert not cmd[-2].startswith("--"), (
+        f"{cmd[-2]!r} directly precedes the prompt; it must be a flag's value")
+
+
 class FakeProcess:
     """Stands in for a Popen handle: an iterable stdout and a return code."""
 
