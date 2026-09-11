@@ -2911,7 +2911,9 @@ FRAMEWORK_INTERFACE = (
     "matches",        # (root) -> bool
     "detect",         # (root) -> FrameworkFacts subclass
     "blocks",         # (facts, repo) -> (list[QualityBlock], list[str])
-    "describe",       # (facts) -> list[str]
+    "describe",       # (facts) -> list[str], rendered into a generated
+                      #   module's DOCSTRING - return normalized paths, because
+                      #   a backslash there is a live escape sequence
     "gate_wiring",    # (facts) -> list[GateWiring]
 )
 
@@ -4152,15 +4154,17 @@ and extend `generate` to write the second file:
         """Facts in, files out. `write=False` is the --doctor dry run."""
         blocks, unresolved = self._collect(facts)
         wirings = self._wirings(facts)
+        # Rendered unconditionally, written only when asked. render_* runs an
+        # ast.parse self-check, so a dry run PROVES the generated modules would
+        # import - which is the single most useful thing --doctor can do, and
+        # it could not do it while rendering lived inside `if write:`.
+        blocks_text = emit.render_blocks_module(
+            facts, blocks, summary=[f"  {line}" for line in self.describe(facts)])
+        gates_text = emit.render_gates_module(facts, wirings)
         written: list[str] = []
         if write:
-            emit.write_file(
-                root, BLOCKS_RELATIVE,
-                emit.render_blocks_module(
-                    facts, blocks, summary=[f"  {line}" for line in self.describe(facts)]),
-                written)
-            emit.write_file(root, GATES_RELATIVE,
-                            emit.render_gates_module(facts, wirings), written)
+            emit.write_file(root, BLOCKS_RELATIVE, blocks_text, written)
+            emit.write_file(root, GATES_RELATIVE, gates_text, written)
         return GenerationReport(profile=self.NAME, files=written, blocks=blocks,
                                 gates=[w.name for w in wirings], unresolved=unresolved)
 ```
