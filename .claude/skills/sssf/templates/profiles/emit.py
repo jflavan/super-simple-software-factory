@@ -10,11 +10,13 @@ the recipe is what the humans run and the humans keep it working.
 
 from __future__ import annotations
 
+import ast
 from collections import Counter
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .facts import Frontend, GateWiring, ProfileFacts, QualityBlock
+from .facts import Frontend, GateWiring, ProfileFacts, QualityArea, QualityBlock
 
 # (package.json script, candidate recipe names, quality operation, block prefix)
 FrontendScript = tuple[str, list[str], str, str]
@@ -82,17 +84,31 @@ def labels(directories: list[str]) -> dict[str, str]:
 
     `apps/web` is `web` until a repo also has `packages/web`, at which point
     both become their full path. Uniqueness matters: two blocks with one name
-    produce two trace rows nobody can tell apart.
+    produce two trace rows nobody can tell apart, and overwrite each other's
+    artifacts.
+
+    The path transform is not injective — `a/b/web` and `a-b/web` both flatten
+    to `a-b-web` — so a surviving collision gets an index. Rare, but the
+    alternative is a duplicate-name abort that names the wrong subsystem.
     """
     plain = {d: (Path(d).name or "root") for d in directories}
     counts = Counter(plain.values())
-    return {directory: (label if counts[label] == 1
-                        else directory.replace("/", "-").strip("-") or "root")
-            for directory, label in plain.items()}
+    resolved = {directory: (label if counts[label] == 1
+                            else directory.replace("/", "-").strip("-.") or "root")
+                for directory, label in plain.items()}
+
+    seen: Counter[str] = Counter(resolved.values())
+    used: Counter[str] = Counter()
+    for directory, label in resolved.items():
+        if seen[label] > 1:
+            used[label] += 1
+            resolved[directory] = f"{label}-{used[label]}"
+    return resolved
 
 
 def script_blocks(frontends: list[Frontend], repo: ProfileFacts,
-                  scripts: list[FrontendScript]) -> tuple[list[QualityBlock], list[str]]:
+                  scripts: list[FrontendScript],
+                  area: QualityArea = "frontend") -> tuple[list[QualityBlock], list[str]]:
     """package.json scripts, as quality blocks. One implementation, every framework.
 
     This is the function that makes a second frontend framework cheap: an
@@ -117,7 +133,7 @@ def script_blocks(frontends: list[Frontend], repo: ProfileFacts,
                                   name=label_of[frontend.directory])
             blocks.append(QualityBlock(
                 name=f"{prefix}-{label_of[frontend.directory]}",
-                area="frontend", operation=operation,
+                area=area, operation=operation,
                 argv=argv or [frontend.package_manager, "run", script],
                 # A recipe runs from the repo root, because that is where the
                 # task runner resolves its own paths from. A raw package-manager
@@ -137,6 +153,19 @@ def _stamp() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def _safe(text: str) -> str:
+    """Make a discovered string safe to sit inside a generated docstring.
+
+    The one place `repr()` cannot protect. A docstring has no quoting, and
+    backslash escapes are still live inside it — so a package.json script key
+    of `build:\\Unit` is a truncated \\U escape, and one containing a triple
+    quote ends the docstring early. Both are legal JSON, and a branch name may
+    contain a quote too: git forbids spaces and backslashes in refs, not
+    quotes.
+    """
+    return text.replace("\\", "/").replace('"""', "'''")
+
+
 def _summary(facts: ProfileFacts, extra: list[str]) -> str:
     lines = list(extra)
     lines.append(f"  task runner: {facts.task_runner or '(none)'}")
@@ -152,14 +181,19 @@ def _entry(block: QualityBlock) -> str:
             f"        argv={block.argv!r},\n"
             f"        cwd={block.cwd!r}, tier={block.tier!r}, "
             f"timeout_seconds={block.timeout_seconds},\n"
-            f"    ),  # {block.source}\n")
+            f"    ),  # {block.source.replace(chr(10), ' ')}\n")
 
 
 def render_blocks_module(facts: ProfileFacts, blocks: list[QualityBlock],
-                         summary: list[str] = ()) -> str:
-    return BLOCKS_HEADER.format(
-        profile=facts.profile, stamp=_stamp(), summary=_summary(facts, list(summary)),
+                         summary: Sequence[str] = ()) -> str:
+    text = BLOCKS_HEADER.format(
+        profile=_safe(facts.profile), stamp=_stamp(),
+        summary=_safe(_summary(facts, list(summary))),
         entries="".join(_entry(b) for b in blocks))
+    # A module this process cannot parse is one the ADW runtime cannot import,
+    # an install later, with nothing pointing back here. Fail on this stack.
+    ast.parse(text)
+    return text
 
 
 def render_gates_module(facts: ProfileFacts, wirings: list[GateWiring]) -> str:
@@ -171,13 +205,18 @@ def render_gates_module(facts: ProfileFacts, wirings: list[GateWiring]) -> str:
             names.append(wiring.name)
     imports = "\n".join(f"from .{module} import {', '.join(sorted(names))}"
                         for module, names in sorted(by_module.items()))
-    return GATES_HEADER.format(
-        profile=facts.profile, stamp=_stamp(), imports=imports,
+    text = GATES_HEADER.format(
+        profile=_safe(facts.profile), stamp=_stamp(), imports=imports,
         entries="".join(f"    {w.call},\n" for w in wirings))
+    ast.parse(text)
+    return text
 
 
-def write_file(root, relative: str, text: str, written: list[str]) -> None:
+def write_file(root: Path | str, relative: str, text: str, written: list[str]) -> None:
     path = Path(root) / relative
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding="utf-8")
+    # newline="\n" pins LF even on Windows: Path.write_text applies universal-
+    # newline translation by default, which would write CRLF here and produce
+    # a whole-file diff on a re-install from the other platform.
+    path.write_text(text, encoding="utf-8", newline="\n")
     written.append(str(path))

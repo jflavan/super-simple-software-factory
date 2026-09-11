@@ -86,9 +86,11 @@ QualityTier = Literal["fast", "full"]
 class QualityBlock(BaseModel):
     """One block the generator decided to emit, plus WHY it chose that command.
 
-    `source` never reaches the generated file — it exists for the install
-    report, so "just test-api" and "dotnet test apps/api/X.csproj" are
-    distinguishable at a glance from a preference the operator can override.
+    `source` rides along as the trailing comment on each entry in the
+    generated file, so the operator editing that file can see where each
+    command came from — "just test-api" versus "dotnet test apps/api/X.csproj"
+    is distinguishable at a glance from a preference the operator can
+    override. It is never part of the spec itself.
     """
 
     name: str

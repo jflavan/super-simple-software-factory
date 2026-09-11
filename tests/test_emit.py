@@ -57,6 +57,13 @@ def test_the_repo_root_is_labelled_root():
     assert emit.labels(["."]) == {".": "root"}
 
 
+def test_a_transform_collision_that_survives_flattening_gets_an_index():
+    """`a/b/web` and `a-b/web` both flatten to `a-b-web` - the transform itself collides."""
+    names = emit.labels(["a/b/web", "a-b/web"])
+    assert len(set(names.values())) == 2
+    assert names["a/b/web"] != names["a-b/web"]
+
+
 # ── script blocks ────────────────────────────────────────────────────────────
 
 def test_a_script_becomes_a_block_in_its_own_directory():
@@ -127,6 +134,12 @@ def test_colliding_packages_do_not_share_one_recipe():
     assert all("build-web" not in block.argv for block in blocks)
 
 
+def test_the_area_default_can_be_overridden_for_a_non_frontend_package():
+    frontends = [Frontend(directory="apps/api", scripts=["build"])]
+    blocks, _ = emit.script_blocks(frontends, _repo(), SCRIPTS, area="backend")
+    assert blocks[0].area == "backend"
+
+
 # ── rendering ────────────────────────────────────────────────────────────────
 
 def test_a_rendered_blocks_module_is_valid_python_that_builds_specs():
@@ -134,7 +147,11 @@ def test_a_rendered_blocks_module_is_valid_python_that_builds_specs():
     facts = _repo(task_runner="just")
     blocks = [QualityBlock(name="t", area="backend", operation="build",
                            argv=["dotnet", "test", "a/B.csproj"], tier="full",
-                           timeout_seconds=1800, source="project role unit-tests")]
+                           timeout_seconds=1800, source="project role unit-tests"),
+              QualityBlock(name="check-web", area="frontend", operation="typecheck",
+                           argv=["npm", "run", "check"], cwd="apps/web",
+                           tier="fast", timeout_seconds=600,
+                           source="npm script 'check'")]
 
     text = emit.render_blocks_module(facts, blocks)
 
@@ -143,8 +160,14 @@ def test_a_rendered_blocks_module_is_valid_python_that_builds_specs():
     assert "from .data_types import QualityCheckSpec" in text
     namespace = {"QualityCheckSpec": QualityCheckSpec}
     exec(text.split("from .data_types import QualityCheckSpec", 1)[1], namespace)
-    assert namespace["BLOCKS"][0].tier == "full"
-    assert namespace["BLOCKS"][0].timeout_seconds == 1800
+    assert namespace["BLOCKS"] == [
+        QualityCheckSpec(name="t", area="backend", operation="build",
+                         argv=["dotnet", "test", "a/B.csproj"], cwd=".",
+                         tier="full", timeout_seconds=1800),
+        QualityCheckSpec(name="check-web", area="frontend", operation="typecheck",
+                         argv=["npm", "run", "check"], cwd="apps/web",
+                         tier="fast", timeout_seconds=600),
+    ]
 
 
 def test_a_rendered_gates_module_imports_only_what_it_wires():
@@ -174,8 +197,63 @@ def test_two_gates_from_one_module_share_an_import_line():
     assert "env_example_sync, sveltekit_csp" in text
 
 
+def test_two_wirings_sharing_a_module_and_name_still_get_two_entries():
+    """Two DIFFERENT calls behind the same imported name - dedupe is the import, not the entry."""
+    facts = _repo()
+    wirings = [GateWiring(module="gates_dotnet", name="ef_migration_triad",
+                          call="ef_migration_triad(['a/A.csproj'])"),
+               GateWiring(module="gates_dotnet", name="ef_migration_triad",
+                          call="ef_migration_triad(['b/B.csproj'])")]
+    text = emit.render_gates_module(facts, wirings)
+    assert text.count("from .gates_dotnet import") == 1
+    assert text.count("ef_migration_triad(['a/A.csproj'])") == 1
+    assert text.count("ef_migration_triad(['b/B.csproj'])") == 1
+
+
+# ── summary ──────────────────────────────────────────────────────────────────
+
+def test_the_summary_lines_reach_the_generated_docstring():
+    facts = _repo(task_runner="just", default_branch="trunk",
+                  conventions=["CLAUDE.md"])
+    text = emit.render_blocks_module(facts, [], summary=["  solution: A.sln"])
+    assert "  solution: A.sln" in text
+    assert "task runner: just" in text
+    assert "default branch: trunk" in text
+    assert "conventions: CLAUDE.md" in text
+
+
+def test_a_hostile_discovered_string_still_renders_an_importable_module():
+    """A package.json script key and a branch name are both arbitrary text."""
+    facts = _repo(default_branch='a"""b')
+    text = emit.render_blocks_module(
+        facts, [], summary=['  frontend: web (scripts: build:\\Unit, """)'])
+    ast.parse(text)          # would raise before the fix
+    assert '"""' not in text.split('"""', 2)[1]     # docstring body is clean
+
+
 def test_writing_records_the_path_it_wrote(tmp_path):
     written = []
     emit.write_file(tmp_path, "adws/adw_modules/x.py", "BLOCKS = []\n", written)
     assert (tmp_path / "adws" / "adw_modules" / "x.py").read_text() == "BLOCKS = []\n"
     assert len(written) == 1
+
+
+def test_writing_overwrites_an_existing_file(tmp_path):
+    written = []
+    emit.write_file(tmp_path, "x.py", "BLOCKS = [1]\n", written)
+    emit.write_file(tmp_path, "x.py", "BLOCKS = [2]\n", written)
+    assert (tmp_path / "x.py").read_text() == "BLOCKS = [2]\n"
+
+
+def test_writing_round_trips_non_ascii_content(tmp_path):
+    written = []
+    text = "# café — emdash\nBLOCKS = []\n"
+    emit.write_file(tmp_path, "x.py", text, written)
+    assert (tmp_path / "x.py").read_text(encoding="utf-8") == text
+
+
+def test_writing_uses_lf_newlines_even_on_windows(tmp_path):
+    written = []
+    emit.write_file(tmp_path, "x.py", "x = 1\ny = 2\n", written)
+    raw = (tmp_path / "x.py").read_bytes()
+    assert b"\r\n" not in raw
