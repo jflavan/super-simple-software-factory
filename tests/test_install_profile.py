@@ -190,8 +190,14 @@ def test_a_profile_is_refused_on_a_stale_installation(tmp_path):
     # Simulate a pre-profile installation: the stamped runtime predates the
     # symbols the generated files need.
     quality = tmp_path / "adws" / "adw_modules" / "quality.py"
-    quality.write_text(quality.read_text().replace(
-        "_import_generated_blocks", "_old_name_for_the_same_thing"))
+    # encoding= on both, explicitly: quality.py's banner carries box-drawing
+    # characters, and the default text encoding on a Windows console is cp1252,
+    # which cannot decode them. Without this the TEST fails for a reason that
+    # has nothing to do with what it is testing.
+    quality.write_text(
+        quality.read_text(encoding="utf-8").replace(
+            "_import_generated_blocks", "_old_name_for_the_same_thing"),
+        encoding="utf-8")
 
     result = _install(tmp_path)
     assert result.returncode != 0
@@ -205,8 +211,14 @@ def test_doctor_still_works_against_a_stale_installation(tmp_path):
     dotnet_svelte_repo(tmp_path)
     _install(tmp_path)
     quality = tmp_path / "adws" / "adw_modules" / "quality.py"
-    quality.write_text(quality.read_text().replace(
-        "_import_generated_blocks", "_old_name_for_the_same_thing"))
+    # encoding= on both, explicitly: quality.py's banner carries box-drawing
+    # characters, and the default text encoding on a Windows console is cp1252,
+    # which cannot decode them. Without this the TEST fails for a reason that
+    # has nothing to do with what it is testing.
+    quality.write_text(
+        quality.read_text(encoding="utf-8").replace(
+            "_import_generated_blocks", "_old_name_for_the_same_thing"),
+        encoding="utf-8")
 
     result = _install(tmp_path, "--doctor")
     assert result.returncode == 0
