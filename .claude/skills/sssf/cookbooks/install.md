@@ -178,3 +178,73 @@ directory under each agent:
     adws/adw_data/sessions/<adw_id>/<agent>/pi_sessions  ->  .../sessions
 
 Or simply start the run again. New installations are unaffected.
+
+## Worked example: an ASP.NET Core + SvelteKit monorepo
+
+This section names one specific repository, `codec-chat`, because it is the one
+the profile was verified against. **It is documentation.** Nothing shipped under
+`templates/profiles/` references it, and nothing may: a profile encodes stack
+facts, discovered facts and configured facts, never a path from one repo.
+
+The repository: `Codec.sln` with five projects, two SvelteKit frontends at
+`apps/web` and `apps/admin`, and a `justfile` with 86 recipes.
+
+```bash
+cd /path/to/codec-chat
+uv run <skill>/scripts/install.py --doctor
+```
+
+Abridged output:
+
+```
+profile: dotnet-svelte  (frameworks: dotnet, sveltekit)
+  solution: Codec.sln
+  project: apps/api/Codec.Api/Codec.Api.csproj  [app]
+  project: apps/api/Codec.Api.Tests/Codec.Api.Tests.csproj  [unit-tests]
+  project: apps/api/Codec.Api.IntegrationTests/...  [integration-tests]
+  frontend: apps/web  [npm] scripts: build, check, check:watch, dev, ...
+    env example: apps/web/.env.example
+    csp: apps/web/svelte.config.js
+  task runner: just (86 recipes)
+    recipes from: just --summary
+  conventions: CLAUDE.md, AGENTS.md, CONTRIBUTING.md, .github/instructions/
+
+  quality blocks wired: 9
+    [fast] test-unit: just test-fast
+    [full] test-integration: just test-api-integration
+    [fast] build-sln: just build-sln
+    [fast] check-web: just check-web
+    ...
+  gates wired: ef_migration_triad, env_example_sync, sveltekit_csp
+  doctor: nothing was written.
+```
+
+**Every block resolved to a recipe the team already maintains**, rather than to
+a command the generator composed. That is the preference order working: a
+recipe is what the humans run and what the humans keep working. Where no recipe
+matches, the generator composes `dotnet test <project>` or `npm run <script>`
+with the package's directory as `cwd` — and says so in the block's trailing
+comment, so the operator can tell the two apart at a glance.
+
+Note `test-integration` is tagged `full`. The project references
+`Testcontainers`, so it needs Docker up, and a bounded fix loop would pay that
+cost on every retry. `run_tests` runs the fast tier; `run_quality` runs both.
+
+### What `--doctor` tells you after a restructure
+
+Generated blocks do not notice that a frontend moved. Rename `apps/web` and
+re-run `--doctor`: the report names the new location while the committed
+`quality_blocks.py` still names the old one. That difference is the drift, and
+re-installing with `--profile` rewrites the file.
+
+### Reading the unresolved section
+
+The most useful half of the report is what it could **not** wire:
+
+```
+  UNRESOLVED (1) - these are not checked by anything:
+    ! frontend apps/web has no .env.example - the public variable gate is not wired for it
+```
+
+A factory that wired eight of nine things has to say which one is missing. The
+alternative is discovering it later as a run that passed without checking.
