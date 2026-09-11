@@ -40,7 +40,17 @@ Re-running is safe. `install.py` skips **every** file that already exists — yo
 3. **The model resolves.** For `pi`, the config's default `gemini-3.6-flash` must be a registered id in `~/.pi/agent/models.json` — check with `pi --list-models` or read the file directly. For `claude_code`, the model is written `anthropic/<model-id>` and only its shape and provider are validated — there is no catalog to probe. See `references/config.md` for both.
 4. **Gitignore** — `install.py` appends `adws/adw_data/sessions/`, `adws/adw_data/sssf.db*`, and `.env` for you; confirm they landed. All three are runtime or secrets and must never be committed.
 5. **Git repo** — ADWs that end in a commit phase call `git_helper.commit_all`, which raises if the cwd is not a git repository. Run `git init` and make a first commit before using `adw_plan_build.py`, `adw_plan_build_test.py`, or `adw_simple_sdlc.py`. `adw_document.py` needs one too: it measures the change with `git diff` against a base ref (`main` by default, `--base` to override).
-6. **Smoke test** — `just demo` runs two cheap read-only workflows back to back, or run the smallest ADW directly:
+6. **Windows: force UTF-8 on your console.** The run banner prints box-drawing and arrow
+   characters. A default Windows console is cp1252 and cannot encode them, and the failure is
+   not cosmetic — `rich` raises `UnicodeEncodeError` mid-phase, the run dies before it can
+   record the phase's outcome, and that session's row stays `running` in the trace forever.
+   Set both, in the shell you launch ADWs from:
+
+       PYTHONUTF8=1
+       PYTHONIOENCODING=utf-8
+
+   Windows Terminal with a UTF-8 code page works too. Non-Windows consoles are unaffected.
+7. **Smoke test** — `just demo` runs two cheap read-only workflows back to back, or run the smallest ADW directly:
 
 ```bash
 just demo                                                    # both, end to end

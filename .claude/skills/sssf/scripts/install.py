@@ -14,6 +14,7 @@ Existing files are skipped unless --force.
 """
 
 import argparse
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -94,6 +95,10 @@ def main() -> int:
     print("  4. just obs              # the trace UI, needs bun")
     print("\n  no just? the raw form of step 2 is:")
     print("     uv run adws/adw_prompt.py \"say hello\" --agent scout")
+    if os.name == "nt":
+        print("\n  windows: set PYTHONUTF8=1 and PYTHONIOENCODING=utf-8 in your shell —")
+        print("           the run banner cannot encode on a cp1252 console, and the")
+        print("           crash leaves the session's trace row stuck at 'running'")
     return 0
 
 
