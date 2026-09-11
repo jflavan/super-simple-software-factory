@@ -62,6 +62,23 @@ def test_select_refuses_to_guess_between_two_matches(tmp_path, monkeypatch):
     assert "--profile" in str(error.value)
 
 
+def test_discovery_is_dynamic_not_a_hardcoded_list(tmp_path, monkeypatch):
+    """The registry's whole claim: a directory with a profile.yaml IS a profile.
+
+    A hardcoded dict would pass every other test in this file.
+    """
+    from profiles import registry
+    monkeypatch.setattr(registry, "PROFILES_DIR", tmp_path)
+    assert registry.names() == []
+
+    directory = tmp_path / "invented_stack"
+    directory.mkdir()
+    (directory / "profile.yaml").write_text(
+        "name: invented\ndescription: x\nframeworks: [dotnet]\n", encoding="utf-8")
+
+    assert registry.names() == ["invented"]
+
+
 def test_the_profile_yaml_declares_no_repository_specific_paths():
     """The design rule, on the file most likely to break it."""
     from pathlib import Path

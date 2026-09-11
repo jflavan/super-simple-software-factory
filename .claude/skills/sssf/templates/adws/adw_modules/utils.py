@@ -212,7 +212,7 @@ def claimed_files(envelope, run) -> list[str]:
             for f in getattr(envelope, "changed_files", [])]
 
 
-def read_text(path) -> str:
+def read_text(path, max_bytes: int | None = None) -> str:
     """File text, or empty when the file is not there.
 
     A gate reads files the change touched, and `changed_files` includes
@@ -222,8 +222,18 @@ def read_text(path) -> str:
     expected propagates, because "the harness could not read the policy file"
     is not a problem the agent can fix, and laundering it into a gate violation
     asks the agent to fix it anyway.
+
+    `max_bytes` caps how much is actually read off disk. None (the default)
+    reads the whole file — every caller's behaviour before this parameter
+    existed. A gate that regex-scans a checked-in minified bundle has nothing
+    useful to say about it anyway, so a caller that expects to see such files
+    — a stack gate scanning "every changed source file" — should pass a
+    bound rather than loading megabytes of generated text per phase.
     """
     try:
-        return Path(path).read_text(errors="replace")
+        if max_bytes is None:
+            return Path(path).read_text(errors="replace")
+        with open(path, "rb") as file:
+            return file.read(max_bytes).decode("utf-8", errors="replace")
     except (FileNotFoundError, NotADirectoryError):
         return ""

@@ -140,6 +140,49 @@ def test_an_aliased_import_is_checked_under_its_real_name(tmp_path):
     assert "PUBLIC_API_URL" in gate(_envelope([source]), _run(tmp_path)).violations[0]
 
 
+# ── Fix 5: `name in declared` was a substring test over the raw file text ───
+
+def test_a_shorter_declared_name_does_not_falsely_satisfy_a_longer_reference(tmp_path):
+    """`.env.example` declares PUBLIC_API_URL; the source reads PUBLIC_API.
+
+    A substring test over the raw text would find "PUBLIC_API" inside
+    "PUBLIC_API_URL" and call it satisfied. Parsing declared keys catches this.
+    """
+    source = _source(tmp_path, "apps/web/src/lib/api.ts",
+                     "import { PUBLIC_API } from '$env/static/public';\n")
+    _source(tmp_path, "apps/web/.env.example", "PUBLIC_API_URL=http://x\n")
+    gate = env_example_sync([("apps/web", "apps/web/.env.example")], PREFIXES)
+    report = gate(_envelope([source]), _run(tmp_path))
+    assert not report.passed
+    assert "PUBLIC_API" in report.violations[0]
+
+
+def test_a_commented_out_declaration_still_satisfies_the_gate(tmp_path):
+    """A commented `# PUBLIC_API_URL=` documents an optional variable."""
+    source = _source(tmp_path, "apps/web/src/lib/api.ts",
+                     "import { PUBLIC_API_URL } from '$env/static/public';\n")
+    _source(tmp_path, "apps/web/.env.example", "# PUBLIC_API_URL=\n")
+    gate = env_example_sync([("apps/web", "apps/web/.env.example")], PREFIXES)
+    assert gate(_envelope([source]), _run(tmp_path)).passed
+
+
+# ── Fix 6: a root "." pair must not swallow a sibling frontend's files ──────
+
+def test_a_root_pair_does_not_double_check_a_sibling_frontends_files(tmp_path):
+    _source(tmp_path, ".env.example", "")
+    _source(tmp_path, "apps/admin/.env.example", "PUBLIC_ADMIN_URL=http://x\n")
+    source = _source(tmp_path, "apps/admin/src/x.ts",
+                     "import { PUBLIC_ADMIN_URL } from '$env/static/public';\n")
+
+    gate = env_example_sync([(".", ".env.example"),
+                             ("apps/admin", "apps/admin/.env.example")], PREFIXES)
+    report = gate(_envelope([source]), _run(tmp_path))
+
+    # Checked once, against its own example - not again against the root's.
+    assert len(report.checks) == 1
+    assert report.passed
+
+
 def test_each_frontend_is_checked_against_its_own_example(tmp_path):
     _source(tmp_path, "apps/web/.env.example", "")
     _source(tmp_path, "apps/admin/.env.example", "")
@@ -286,6 +329,43 @@ def test_a_fetch_call_still_fires_despite_the_narrower_pattern(tmp_path):
     report = gate(_envelope([source]), _run(tmp_path))
     assert not report.passed
     assert "tiles.example.com" in report.violations[0]
+
+
+# ── Fix 4: policy comparison is whole extracted origins, not raw substring ──
+
+def test_a_narrower_origin_is_not_hidden_by_a_wider_ports_suffix(tmp_path):
+    """policy allows :8443; the source requests the bare origin - different
+    tokens, so a substring match ("https://example.com" inside
+    "https://example.com:8443") must not silently satisfy it."""
+    _source(tmp_path, HOOKS, "const csp = \"connect-src https://example.com:8443\";\n")
+    source = _source(tmp_path, "apps/web/src/lib/api.ts",
+                     "fetch('https://example.com/data');\n")
+    gate = sveltekit_csp([("apps/web", HOOKS)])
+    report = gate(_envelope([source]), _run(tmp_path))
+    assert not report.passed
+    assert "example.com" in report.violations[0]
+
+
+# ── Fix 8: LOCAL_HOSTS compares the parsed host, not a substring ───────────
+
+def test_a_host_merely_containing_localhost_is_not_treated_as_local(tmp_path):
+    _source(tmp_path, HOOKS, "const csp = \"default-src 'self'\";\n")
+    source = _source(tmp_path, "apps/web/src/lib/evil.ts",
+                     "fetch('https://localhost.attacker.com/x');\n")
+    gate = sveltekit_csp([("apps/web", HOOKS)])
+    report = gate(_envelope([source]), _run(tmp_path))
+    assert not report.passed
+    assert "localhost.attacker.com" in report.violations[0]
+
+
+def test_a_host_merely_containing_localhost_as_a_substring_is_not_local(tmp_path):
+    _source(tmp_path, HOOKS, "const csp = \"default-src 'self'\";\n")
+    source = _source(tmp_path, "apps/web/src/lib/cdn.ts",
+                     "fetch('https://my-localhost-cdn.com/x');\n")
+    gate = sveltekit_csp([("apps/web", HOOKS)])
+    report = gate(_envelope([source]), _run(tmp_path))
+    assert not report.passed
+    assert "my-localhost-cdn.com" in report.violations[0]
 
 
 def test_the_hooks_file_itself_is_not_scanned_for_origins(tmp_path):
