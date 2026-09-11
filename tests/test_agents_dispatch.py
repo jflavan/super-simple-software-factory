@@ -58,3 +58,19 @@ def test_a_pi_extension_tool_on_claude_code_is_a_config_error():
 
 def test_a_clean_claude_code_agent_has_no_problems():
     assert agent_cc.validate_agent(_agent()) == []
+
+
+def test_every_backend_implements_the_interface():
+    """The alias and hooks that hold the abstraction up are easy to delete."""
+    for name, module in agents.BACKENDS.items():
+        for attr in agents.BACKEND_INTERFACE:
+            assert hasattr(module, attr), f"{name} backend is missing {attr}"
+
+
+def test_the_interface_names_what_a_backend_is_missing():
+    incomplete = SimpleNamespace(__name__="fake_backend", run=lambda: None)
+
+    missing = [a for a in agents.BACKEND_INTERFACE if not hasattr(incomplete, a)]
+
+    assert "validate_agent" in missing
+    assert "ToolCallTracker" in missing

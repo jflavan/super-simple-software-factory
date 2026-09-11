@@ -30,6 +30,21 @@ class GateFailure(RuntimeError):
 
 BACKENDS = {"pi": agent_pi, "claude_code": agent_cc}
 
+# Every backend is duck-typed: BACKENDS maps a name to a module and callers
+# assume these five names exist. Checked here, at import, so a backend missing
+# one fails with a sentence naming it — rather than as a bare AttributeError
+# midway through validate() or, worse, after an agent has already spawned.
+BACKEND_INTERFACE = ("run", "resolve_model", "context_window",
+                     "validate_agent", "ToolCallTracker")
+
+for _name, _module in BACKENDS.items():
+    _missing = [attr for attr in BACKEND_INTERFACE if not hasattr(_module, attr)]
+    if _missing:
+        raise ImportError(
+            f"coding-agent backend {_name!r} ({_module.__name__}) does not "
+            f"implement the backend interface — missing: {', '.join(_missing)}")
+del _name, _module, _missing
+
 
 def backend_for(agent: AgentConfig):
     """The module that runs this agent. Both expose run/resolve_model/
