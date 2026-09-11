@@ -2059,6 +2059,34 @@ Add to the `install.md` post-install checklist, replacing the current item 2:
    `CLAUDE_CODE_PATH` in `.env` if the binary is not on PATH.
 ```
 
+- [ ] **Step 3a: Document the session-directory rename as a migration hazard**
+
+Raised in the Task 14 review, and it corrects a claim made earlier in this plan. The rename
+of the per-agent session directory from `pi_sessions` to `sessions` was described as safe
+because "nothing depends on the old name". That is true for Claude Code agents, which never
+had state under the old name — but **false for pi agents with existing session state**.
+`agent_map.json` persists each agent's session id across runs, and pi's `--session-id` is
+create-or-continue, so an ADW resumed with `--adw-id` from before this change hands pi an id
+whose directory is now empty. pi does not error: it silently creates a fresh session under
+that id, and the agent loses its conversation history. Silent context loss is the worst
+failure mode to diagnose, so it has to be written down.
+
+Also update `references/handoff.md`, which still documents the directory as `pi_sessions/`.
+
+Add to `cookbooks/install.md` and `README.md`:
+
+```markdown
+**Upgrading an existing installation.** The per-agent session directory was renamed from
+`pi_sessions/` to `sessions/`. A run resumed with `--adw-id` from before the rename will
+find an empty directory — and pi's `--session-id` creates-or-continues, so it starts a
+fresh session rather than failing, and that agent silently loses its history. Before
+resuming an older run, rename the directory under each agent:
+
+    adws/adw_data/sessions/<adw_id>/<agent>/pi_sessions  ->  .../sessions
+
+Or simply start the run again. New installations are unaffected.
+```
+
 - [ ] **Step 3b: Document the tool-mapping capability widening**
 
 Raised in the Task 7 review. `ls` maps to `Bash`, so an agent whose config asks only for
