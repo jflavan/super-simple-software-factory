@@ -21,12 +21,21 @@ defaults:
   coding_agent: pi                 # pi (default) or claude_code — both are full backends
   model: google/gemini-3.6-flash   # ALWAYS provider/model-id — a bare id is ambiguous
   thinking: medium                 # off | minimal | low | medium | high | xhigh | max
-  harness_engineering: []          # pi extension names
+  harness_engineering: []          # pi extension FILE PATHS, not names
+  tools: [read, bash, edit, write, grep, find, ls]   # all seven builtins; agents narrow
+  protected_files:                 # no agent may edit the machinery that grades it
+    - adws/adw_modules/
+    - adws/adw_sssf_config/
+    - adws/adw_*.py
   data_dir: adws/adw_data          # runtime home: {data_dir}/sessions/{adw_id}/{agent_name}/
 
 observability:
   db: adws/adw_data/sssf.db        # tracer writes here; the UI polls it
   poll_ms: 500                     # visualizer live-poll cadence
+
+doc_policy:                        # optional; empty means the doc_policy gate never fires
+  - when: "apps/api/**/Auth*.cs"   # a changed file matching this...
+    require: ["docs/AUTH.md"]      # ...obliges a change matching one of these
 
 agents:
   - name: planner                  # ADW scripts name agents, never models
@@ -38,6 +47,8 @@ agents:
     prompt_engineering:
       system: adws/adw_data/prompt_engineering/planner/system.md
       user: adws/adw_data/prompt_engineering/planner/user.md
+    writes:                        # the boundary — all this agent may leave in the repo
+      - specs/
 
   - name: scout
     thinking: high                 # unset keys fall through to defaults
@@ -50,7 +61,11 @@ agents:
       - bash
 ```
 
-Every agent entry merges over `defaults`, so an entry only states what differs. Pi's builtin tools are `read`, `bash`, `edit`, `write` — a read-only recon agent gets `[read, bash]`; a builder omits `tools` altogether.
+Every agent entry merges over `defaults`, so an entry only states what differs.
+
+**Pi has seven builtin tools**, not four: `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`. The last three are **off** in bare pi, so an agent that does not name them shells out through `bash` to do the same work — which is why the starter roster sets all seven on `defaults` and lets each agent narrow. The shipped `scout` is the pattern: `[read, grep, find, ls, bash, write]` — `write` only so its findings file lands without a bash heredoc — while the builder inherits the lot.
+
+**`tools` is a capability list. `writes` is the boundary.** They are not the same thing and the difference matters: `bash` runs anything and `write` reaches any path, so "this agent changes nothing" cannot be expressed with `tools`. `writes` is a glob allowlist checked in code after every call, and anything outside it is rolled back and fails the phase. **An agent that omits `writes` is unrestricted** — so a new agent added without one can rewrite your repo. State it deliberately, even when the answer is "everything".
 
 ## After generating
 

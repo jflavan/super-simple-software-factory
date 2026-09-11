@@ -27,21 +27,15 @@ The prompt is inline text or a file path. Launch in the background so you can po
 
 The chain says *what runs*; the config says *who runs it*. **If the engineer references a roster, a config, or a model tier, pass it — do not fall through to the default.**
 
+There is no recipe for this in the stamped `justfile` — it ships deliberately small, and a `rosters` recipe is one of the extras on the `example` branch. Read the configs off disk:
+
 ```bash
-just rosters                            # every roster on disk, and the model each agent runs
+ls adws/adw_sssf_config/*.yaml                      # every roster on disk
+grep -n "name:|model:" adws/adw_sssf_config/*.yaml  # who is in each, and on what
+head -3 adws/adw_sssf_config/sssf.frontier.config.yaml   # the names a roster answers to
 ```
 
-That prints the path to pass and who is in it, in one read:
-
-```
-adws/adw_sssf_config/sssf.config.yaml
-    planner     fireworks/accounts/fireworks/models/kimi-k3
-    builder     google/gemini-3.6-flash (inherited)
-adws/adw_sssf_config/sssf.frontier.config.yaml
-    planner     anthropic/claude-opus-5
-```
-
-Read those from disk every time. Rosters are the engineer's to add, rename, and retune, so a name you remember from a doc is a guess.
+That gives you the path to pass and who is in it. Read it from disk every time. Rosters are the engineer's to add, rename, and retune, so a name you remember from a doc is a guess.
 
 They will rarely say `--config`. Treat any of these as naming a roster, then resolve it to a file:
 
@@ -102,15 +96,33 @@ A hung coding agent produces no events at all, so the trace goes quiet rather th
 ```bash
 just phases <adw_id>     # which phase is still `running`
 just procs <adw_id>      # what that phase is actually running, with pids
-just kill <adw_id>       # stop it — children first, then the workflow
 ```
 
-`processes` rows with `ended_at IS NULL` are the live ones. If `procs` shows a pi child but the phase has produced no `tool_call` events and its `raw_output.jsonl` is empty, the agent never got started properly — check the model resolves and that nothing is blocking the subprocess, rather than waiting it out. `just kill` verifies each pid still matches the command that was recorded before signalling, because pids get recycled.
+There is **no `just kill`** in the stamped `justfile` — like `rosters`, it is one of the extras on the `example` branch. Read the pids out of the trace and signal them yourself, **children first**, so the workflow does not respawn what you just stopped:
 
-A killed run marks itself `fail` and closes its process rows, so the trace never claims work is in flight that is already dead.
+```bash
+uv run adws/adw_trace.py processes | grep <adw_id>   # live rows are the ones with no end time
+kill <child_pid>                                     # the coding agent
+kill <workflow_pid>                                  # then the ADW
+```
+
+Check each pid still matches the command the trace recorded before you signal it — pids get recycled, and the row you are reading may be minutes old.
+
+`processes` rows with `ended_at IS NULL` are the live ones. If `procs` shows a pi child but the phase has produced no `tool_call` events and its `raw_output.jsonl` is empty, the agent never got started properly — check the model resolves and that nothing is blocking the subprocess, rather than waiting it out.
+
+A killed run still closes its own trace. `session.ensure` installs a SIGTERM/SIGINT handler that finalizes the session to `fail` and closes its process rows on the way out, so a plain `kill <pid>` marks the run dead rather than leaving the db claiming work is in flight. A session that reads `running` with no live process means the workflow died *without* a signal — a hard kill, or the cp1252 banner crash on Windows.
+
+## When a check fails
+
+A `kind="code"` quality phase fails differently from an agent phase, and the phase log is deliberately short. Four things to know:
+
+- **The real output is on disk.** Every block writes its full stdout and stderr to `context_handoff/quality/<seq>_<name>/command.log` inside that session's directory. The phase log carries the block name, the exit code, and a snippet; the log file carries the rest. Read it before reporting anything.
+- **`RuntimeError: no quality blocks in tier(s) [...]`** is not a missing test suite. It means every block in `quality_blocks.py` is tagged for a different tier than the one the phase asked for — usually everything tagged `full` and a fix loop asking for `fast`. The engine refuses rather than reporting green on zero commands. It is a config problem, not a code problem, and re-running will not help.
+- **`ValueError: duplicate quality block name(s)`** means two blocks share a name case-insensitively. A name is an artifact directory, so two blocks with one name would overwrite each other's log. Rename one in `quality_blocks.py`.
+- **A command pointing at a directory that moved** shows up as a shell-level failure with an exit code nobody wrote. Run `uv run .claude/skills/sssf/scripts/install.py --doctor` — it re-probes the repo and prints what a profile *would* wire now, writing nothing, so the diff between that and `quality_blocks.py` is the drift. Report it; regenerating is the engineer's call, because it overwrites hand edits.
 
 ## Report
 
 Tell the engineer, in order: which chain and which roster you launched (name the config whenever it was not the default), which phase is running now (or which failed), phase statuses in sequence, and for a failure the gate violations or the error verbatim. Remember **every phase defaults to `fail`** — a phase showing `fail` may simply never have completed; `queued` means it never started. Don't dress up a partial run as a success.
 
-For a visual live view, the visualizer app in the skill (`just obs`, or tmux sessions viz-api :4600 + viz-ui :4601) polls this same db — sessions as cards, runs as swim lanes, phases and tool calls drill-in. The sqlite queries above remain the headless equivalent.
+For a visual live view, the visualizer app in the skill polls this same db — sessions as cards, runs as swim lanes, phases and tool calls drill-in. `just obs` boots both halves: the API on `:4600` and the Vite dev server on `:4601`. **Open `http://localhost:4601`** — 4600 answers JSON, not HTML. The sqlite queries above remain the headless equivalent.

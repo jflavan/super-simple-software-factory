@@ -22,7 +22,7 @@ Thinking levels are the same six-word ladder on both backends — `off | minimal
 
 ```yaml
   - name: builder
-    color: "#22d3ee"      # hex; the starter roster ships violet/cyan/amber/green
+    color: "#22d3ee"      # hex; the starter roster ships violet, cyan, amber, rose, fuchsia
 ```
 
 Purely cosmetic and safe to change mid-project: the color rides the `agent_start` event and the `agent_sessions` row, so the visualizer picks it up on the next run without touching past sessions. Omit the key to let the UI's fallback palette choose.
@@ -67,7 +67,7 @@ Narrow by role, not by reflex:
       - .pi/extensions/json_guard.ts    # a pi extension FILE PATH
 ```
 
-Entries are pi extension **file paths**, passed through as `pi -e <path>`, applied to that agent only. Reach for an output-tightening extension when an agent keeps wrapping its envelope in prose and burning correction retries. The starter roster ships with none — this is an escape hatch, not a default.
+Entries are pi extension **file paths**, passed through as `pi -e <path>`, applied to that agent only. Reach for an output-tightening extension when an agent keeps wrapping its envelope in prose and burning correction retries. The starter roster ships exactly one — `adws/adw_data/harness_engineering/subagents.ts`, on `planner` and `scout`, which is also the live example of the two-part edit below — and every other agent leaves the key off.
 
 **This is a pi-only mechanism, enforced, not just undocumented.** A `claude_code` agent that sets `harness_engineering` fails `agents.validate()` before anything spawns — there is no Claude Code equivalent. Run that agent on `coding_agent: pi`, or drop the key.
 
@@ -90,13 +90,32 @@ Skip the second half and it fails silently: extension loaded, run green, tool ne
 
 ## Add a new agent
 
-Three steps, all required — skipping any one fails `agents.validate()` at ADW startup, before anything spawns:
+Four steps. The first three are required — skipping any one fails `agents.validate()` at ADW startup, before anything spawns. The fourth fails nothing, which is exactly why it gets forgotten:
 
-1. **Prompts.** Create `adws/adw_data/prompt_engineering/{name}/system.md` (Purpose + Instructions — the agent's static identity, nothing else) and `user.md` (an h3 per incoming datum: `{{prompt}}`, `{{previous_envelope}}`, `{{context_handoff_dir}}`, then the task, then a `## Report` section showing the exact output JSON). Copy an existing pair as the shape.
+1. **Prompts.** Create `adws/adw_data/prompt_engineering/{name}/system.md` (Purpose + Instructions — the agent's static identity, nothing else) and `user.md` (an h3 per incoming datum: `{{prompt}}`, `{{previous_envelope}}`, `{{context_handoff_dir}}`, then the task, then a `## Report` section showing the exact output JSON). Copy an existing pair as the shape. An agent that acts on repo code should also name `{{profile_overlay}}` — that is where the stack profile tells it what this repo is built out of, and a template that does not name it silently does not get it.
 2. **Config entry.** Name, purpose, prompt refs, plus anything that differs from `defaults`.
 3. **An output type.** Every agent call parses against a concrete Pydantic model in `adw_modules/data_types.py`. If none of `PlanOutput`, `BuildOutput`, `ScoutOutput`, `ReviewOutput`, `DocumentOutput` fits the new agent's report, add one — see `update_modules.md`. The user prompt's `Report` section must show exactly that JSON shape.
+4. **`writes:`, stated deliberately.** An agent that omits the key is **unrestricted** — `bash` runs anything and `write` reaches any path, so the boundary is not something `tools` can express. `writes` is a glob allowlist checked in code after every call; anything outside it is rolled back and the phase fails. Write `writes: []` for an agent that must change nothing in the repo (it can still write its own report, which is runtime, not the repo), or list the prefixes it owns. Nothing warns you if you leave it off.
 
 Then name the agent in an ADW's `REQUIRED_AGENTS` and call it.
+
+## Add a documentation contract
+
+`doc_policy` is a top-level key in this same file, and the one gate an operator configures rather than codes. Each rule says that a change matching `when` obliges a change matching one of `require`:
+
+```yaml
+doc_policy:
+  - when: "apps/api/**/Auth*.cs"
+    require: ["docs/AUTH.md"]
+  - when: "apps/web/src/**"
+    require: ["docs/ARCHITECTURE.md", "docs/web/**/*.md"]
+```
+
+`gates.doc_policy` reads it after every repo-changing agent call. A rule fires when a changed file matches `when`, and it then requires **each** `require` entry to appear among the changed files too — `require` is a conjunction, not a menu, so the second rule above obliges both documents. The violation goes back into the same session as a correction and the agent updates the document with its context intact; it does not restart. Empty or absent means the gate never fires, so this costs nothing until you use it.
+
+It judges the envelope's **claimed** `changed_files`, like every gate. An agent that quietly omits a file from its own claim is not caught here — this is a contract with a mechanical check behind it, not a proof.
+
+Glob shapes are the same engine as `writes` and `protected_files`: `*` stops at a directory separator, `**` crosses them and matches zero or more directories (so `**/*.md` includes root-level files), and a trailing `/` is a literal directory prefix with glob characters disabled inside it.
 
 ## Rules that do not bend
 
