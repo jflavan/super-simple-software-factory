@@ -69,10 +69,11 @@ def stamp(src: Path, dest: Path, force: bool, stamped: list, skipped: list) -> N
 
 def ensure_gitignore(root: Path, stamped: list) -> None:
     gitignore = root / ".gitignore"
-    existing = gitignore.read_text().splitlines() if gitignore.exists() else []
+    existing = (gitignore.read_text(encoding="utf-8").splitlines()
+                if gitignore.exists() else [])
     missing = [e for e in GITIGNORE_ENTRIES if e not in existing]
     if missing:
-        with gitignore.open("a") as f:
+        with gitignore.open("a", encoding="utf-8", newline="\n") as f:
             f.write("\n# sssf runtime\n" + "\n".join(missing) + "\n")
         stamped.append(f"{gitignore} (+{len(missing)} entries)")
 
@@ -283,9 +284,10 @@ def main() -> int:
         # ASCII only, deliberately. This is the one message that must survive the
         # very console it is warning about - an em dash here would raise the
         # UnicodeEncodeError it exists to prevent, before anyone could read it.
-        print("\n  windows: set PYTHONUTF8=1 and PYTHONIOENCODING=utf-8 in your shell.")
-        print("           The run banner cannot encode on a cp1252 console, and the")
-        print("           crash leaves the session's trace row stuck at 'running'.")
+        print("\n  windows: optional - set PYTHONUTF8=1 and PYTHONIOENCODING=utf-8")
+        print("           to see the banner's box-drawing characters instead of '?'.")
+        print("           Not required: a cp1252 console degrades them rather than")
+        print("           killing the run, and every file is read and written utf-8.")
     return 0
 
 

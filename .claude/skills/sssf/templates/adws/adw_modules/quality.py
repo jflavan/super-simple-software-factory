@@ -77,6 +77,11 @@ def _run(spec: QualityCheckSpec, run) -> QualityCheckResult:
             env=env,
             capture_output=True,
             text=True,
+            # A test runner prints whatever it likes. utf-8 because that is
+            # what modern toolchains emit, errors="replace" because a block
+            # failing is normal and must not become a decode traceback.
+            encoding="utf-8",
+            errors="replace",
             timeout=spec.timeout_seconds,
         )
         returncode = completed.returncode
@@ -96,8 +101,8 @@ def _run(spec: QualityCheckSpec, run) -> QualityCheckResult:
     output_artifact.write_text(
         f"$ {command}\ncwd: {workdir}\nexit: {returncode}\n"
         f"duration_seconds: {duration:.3f}\n"
-        f"\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}\n"
-    )
+        f"\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}\n",
+        encoding="utf-8", newline="\n")
     passed = returncode == 0
     run.tracer.event(EventRecord(
         adw_id=run.adw_id,

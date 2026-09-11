@@ -127,7 +127,7 @@ def solution_projects(root: Path, solution: str,
     entries are appended to `dropped` (raw, pre-normalization) so callers can
     report them instead of letting them vanish.
     """
-    text = (root / solution).read_text(errors="replace")
+    text = (root / solution).read_text(encoding="utf-8", errors="replace")
     pattern = SLNX_PROJECT if solution.endswith(".slnx") else SLN_PROJECT
     solution_dir = Path(solution).parent
     paths = []
@@ -177,7 +177,8 @@ def detect(root) -> DotnetFacts:
         # than crash the installer over it - but record it, so the missing
         # suite is reported rather than silently invisible.
         try:
-            text = path.read_text(errors="replace") if path.is_file() else ""
+            text = (path.read_text(encoding="utf-8", errors="replace")
+                    if path.is_file() else "")
             if not path.is_file():
                 unreadable.append(relative)
         except OSError:

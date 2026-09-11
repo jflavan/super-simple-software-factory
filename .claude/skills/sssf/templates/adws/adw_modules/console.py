@@ -8,6 +8,8 @@ so a CI log reads exactly like a terminal.
 
 from __future__ import annotations
 
+import sys
+
 from rich.console import Console as RichConsole
 from rich.markup import escape
 from rich.panel import Panel
@@ -17,6 +19,41 @@ from .data_types import EnvelopeBase, EventRecord, Phase
 
 KIND_COLOR = {"engineer": "cyan", "agent": "magenta", "code": "yellow"}
 MAX_LINE = 160          # dynamic text (summaries, violations, errors) is clipped
+
+_stdout_made_safe = False
+
+
+def _make_stdout_unable_to_kill_a_run() -> None:
+    """Stop an unencodable glyph from taking the whole run down with it.
+
+    The banner prints `▶`, `─` and `│`. A default Windows console is cp1252,
+    which has none of them, so `rich` raised `UnicodeEncodeError` MID-PHASE:
+    the process died before anything could finalize, and that session's row
+    stayed `running` in the trace forever. The docs' answer was to go set
+    PYTHONIOENCODING yourself, which is a workaround an operator has to know
+    about before the first time it bites them.
+
+    Switching stdout's error handler costs nothing on a UTF-8 console — every
+    character still encodes — and on cp1252 it degrades those three glyphs to
+    `?` instead of killing the run. The encoding itself is left alone
+    deliberately: writing UTF-8 bytes at a cp1252 console would replace a crash
+    with mojibake across every line, where this touches only the characters
+    that could not have been displayed anyway.
+
+    The trace is unaffected either way. It is UTF-8 in SQLite, so the swim-lane
+    UI shows the real glyphs no matter what the terminal could render.
+    """
+    global _stdout_made_safe
+    if _stdout_made_safe:
+        return
+    try:
+        sys.stdout.reconfigure(errors="replace")
+        sys.stderr.reconfigure(errors="replace")
+    except (AttributeError, ValueError, OSError):
+        # Redirected to something without reconfigure(), or already detached.
+        # Nothing here is worth failing a run over.
+        pass
+    _stdout_made_safe = True
 
 
 def _clip(text: str, limit: int = MAX_LINE) -> str:
@@ -34,6 +71,7 @@ class Console:
         self.phase_name = ""
         self.results: list[str] = []            # phase statuses, for the summary
         self._finished = False                  # the summary panel prints once
+        _make_stdout_unable_to_kill_a_run()
         self._out = RichConsole(highlight=False, soft_wrap=True)
 
     # ── the one helper: print AND trace, always together ────────────────────
