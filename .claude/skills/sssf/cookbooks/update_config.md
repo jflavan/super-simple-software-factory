@@ -14,7 +14,7 @@ Edit the agent's entry in place:
 
 Write the model as `provider/model-id`, never a bare id. The same model is usually carried by several providers, and an ambiguous pattern raises in `agents.validate()` — grounding every agent that inherits it. See `references/config.md`.
 
-Thinking levels are Pi's reasoning effort: `off | minimal | low | medium | high | xhigh | max`. It only bites when the model is registered with `reasoning: true` in `~/.pi/agent/models.json`.
+Thinking levels are the same six-word ladder on both backends — `off | minimal | low | medium | high | xhigh | max` — but the mechanism differs. On `pi`, this is Pi's reasoning effort; it only bites when the model is registered with `reasoning: true` in `~/.pi/agent/models.json`. On `claude_code`, there is no reasoning-effort flag at all — `agent_cc.py` maps the same ladder to a `MAX_THINKING_TOKENS` budget in the child process's environment instead.
 
 **A model change means a fresh session.** `agent_map.json` records the model each coding-agent session was created with. When a joined run (`--adw-id`) finds the config's model no longer matches the recorded one, that agent starts a **new** session rather than resuming — the map is updated, never a bad resume. Thinking changes do not invalidate a session; model changes do. Expect the agent to lose its accumulated context window on the first run after the change.
 
@@ -30,6 +30,8 @@ Purely cosmetic and safe to change mid-project: the color rides the `agent_start
 ## Retune tools
 
 Pi's seven builtins: `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`. The last three are **off in bare Pi**, so an agent that doesn't name them will shell out through `bash` to search and list.
+
+These names are pi's; on `coding_agent: claude_code` they are translated (`read` → `Read`, `grep` → `Grep`, and so on) — except **`find` → `Glob` and `ls` → `Bash`**, because Claude Code has no dedicated listing tool, so an agent granted only `ls` gets arbitrary shell execution on that backend. `tools: []` is refused outright at validation for a `claude_code` agent, for the same reason it stalls a Pi one: an agent granted nothing cannot act. See `references/config.md` for the full mapping.
 
 Set the roster-wide floor in `defaults`, then narrow per agent:
 
@@ -66,6 +68,8 @@ Narrow by role, not by reflex:
 ```
 
 Entries are pi extension **file paths**, passed through as `pi -e <path>`, applied to that agent only. Reach for an output-tightening extension when an agent keeps wrapping its envelope in prose and burning correction retries. The starter roster ships with none — this is an escape hatch, not a default.
+
+**This is a pi-only mechanism, enforced, not just undocumented.** A `claude_code` agent that sets `harness_engineering` fails `agents.validate()` before anything spawns — there is no Claude Code equivalent. Run that agent on `coding_agent: pi`, or drop the key.
 
 **Adding a tool-registering extension is a two-part edit.** The extension path goes in `harness_engineering`, *and* the tool name it registers goes in that agent's `tools` list:
 

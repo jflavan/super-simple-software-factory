@@ -85,4 +85,4 @@ Three differences are real and enforced at validation, not discovered at runtime
 - `tools: []` is refused for a Claude Code agent: an agent allowed nothing cannot act.
   Omit the key entirely to ask for every tool.
 
-The visualizer app ships in a later pass — read the trace with `uv run adws/adw_trace.py`.
+The skill ships a read-only visualizer app at `apps/visualizer/` (Vue + Vite on Bun), or read the trace directly with `uv run adws/adw_trace.py`.

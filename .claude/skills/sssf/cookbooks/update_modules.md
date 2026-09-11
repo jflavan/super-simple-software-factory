@@ -17,10 +17,11 @@ Extend `adws/adw_modules/` with new low-level logic.
 | `agent_cc.py` | the Claude Code interface — a full second backend, same shape as `agent_pi.py`: non-interactive `claude -p --output-format stream-json`, JSONL tailed live. Differs where Claude Code itself differs: session resume needs an explicit UUID and `--resume` (tracked in its own `cc_sessions.json`), and `thinking` becomes a `MAX_THINKING_TOKENS` env budget instead of a flag |
 | `gates.py` | validation gates over envelope claims |
 | `changes.py` | deterministic change capture: resolve the base ref, `git diff` into `context_handoff/changes.diff`, adapt the `ChangeSet` into an envelope an agent can be handed |
+| `permissions.py` | fingerprints the repo before and after every agent call; rolls back unauthorized writes and fails the phase — enforces `writes:` and `protected_files` |
+| `quality.py` | `kind="code"` phases: the lint/test/build commands an agent never needs to run, adapted to an envelope via `as_envelope` |
 | `prompts.py` | load system/user prompt refs from config, render placeholders |
 | `session.py` | mint or join `adw_id`, maintain `agent_map.json`, create session dirs incl. `context_handoff/` |
 | `tracer.py` | append JSONL **and** insert every event into `sssf.db` as it happens |
-| `console.py` | the terminal narrative — every line printed also lands in the db as a `log` event, so the UI reads the same story; plain sequential lines, no spinners |
 | `console.py` | the rich stdout reporter — every line printed is ALSO traced as a `log` event (`{message, level}`) so the terminal and the swim-lane UI tell the same story |
 | `git_helper.py` | branch, status, diff, commit — the raw plumbing `changes.py` composes |
 | `utils.py` | safe subprocess env, logging, `resolve_prompt` |
