@@ -1503,7 +1503,12 @@ CONVENTION_DIRS = (".github/instructions", ".cursor/rules")
 
 # A just recipe header starts at column 0, is a name, may take parameters and
 # dependencies, and ends in a colon that is not `:=` (an assignment).
-JUST_RECIPE = re.compile(r"^(?!\s)(?:@)?([A-Za-z_][A-Za-z0-9_-]*)[^:=\n]*:(?!=)",
+#
+# The middle is `[^\n]*?` and not `[^:=\n]*`: a recipe may declare a default
+# parameter (`check-web dir="apps/web":`), and excluding `=` there means the
+# match dies before it ever reaches the terminal colon, silently dropping the
+# recipe. Lazy, so the FIRST colon wins, and the lookahead still rejects `:=`.
+JUST_RECIPE = re.compile(r"^(?!\s)(?:@)?([A-Za-z_][A-Za-z0-9_-]*)[^\n]*?:(?!=)",
                          re.MULTILINE)
 
 
