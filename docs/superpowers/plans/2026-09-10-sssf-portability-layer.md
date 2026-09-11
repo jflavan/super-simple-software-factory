@@ -926,10 +926,32 @@ def build_command(request: AgentRequest, session_uuid_value: str,
     ]
     cmd += ["--resume", session_uuid_value] if resume else ["--session-id", session_uuid_value]
     tools = allowed_tools(request.tools)
-    if tools:
+    # `is not None`, not a truthiness test: None means "every tool" and an empty
+    # list means "no tools", and `if tools:` collapses those two opposites into
+    # the same branch — handing a deliberately tool-less agent the full set.
+    # Task 13's validate_agent rejects the empty list before it can reach here.
+    if tools is not None:
         cmd += ["--allowedTools", ",".join(tools)]
     cmd.append(request.prompt)
     return resolve_argv(cmd)
+```
+
+Add a test pinning the distinction:
+
+```python
+def test_an_empty_tool_list_is_not_the_same_as_no_tools_key():
+    """`None` means every tool; `[]` means none. They must not collapse.
+
+    config.md states an empty list "is not 'all tools' — it is a tool-less
+    agent". A truthiness test would silently grant the full set instead.
+    """
+    every = agent_cc.build_command(_request(tools=None),
+                                   "11111111-2222-3333-4444-555555555555", resume=False)
+    none_at_all = agent_cc.build_command(_request(tools=[]),
+                                         "11111111-2222-3333-4444-555555555555", resume=False)
+
+    assert "--allowedTools" not in every
+    assert "--allowedTools" in none_at_all
 ```
 
 - [ ] **Step 4: Run it to verify it passes**
@@ -1443,6 +1465,14 @@ def validate_agent(agent) -> list[str]:
             f"agent {agent.name!r}: harness_engineering is a pi extension mechanism "
             f"with no Claude Code equivalent ({', '.join(agent.harness_engineering)}) "
             f"— remove it, or run this agent on coding_agent: pi")
+    # An agent allowed nothing cannot act. config.md already says an empty list
+    # "is not 'all tools' — it is a tool-less agent, and it will stall", so say
+    # so at validation rather than spawning something that cannot work. Omitting
+    # the key entirely is how you ask for every tool.
+    if agent.tools is not None and not agent.tools:
+        problems.append(
+            f"agent {agent.name!r}: `tools: []` allows nothing, so this agent "
+            f"cannot act — name the tools it needs, or omit `tools` for all of them")
     try:
         allowed_tools(agent.tools)
     except ValueError as error:
@@ -2095,6 +2125,16 @@ git commit -m "docs: record live verification of the Claude Code backend"
 ## Deferred improvements
 
 Raised during review, deliberately out of scope for this plan. Recorded so they are not lost.
+
+- **`agent_pi` collapses `tools: []` into "every tool"** (found during the Task 7 review).
+  `agent_pi.run` builds its flag with `if request.tools: cmd += ["--tools", ...]`, so an
+  agent configured `tools: []` gets no `--tools` flag at all and pi grants it everything —
+  the exact inversion `references/config.md` warns against when it says an empty list "is
+  not 'all tools' — it is a tool-less agent, and it will stall". This is **pre-existing**,
+  not introduced here; the Claude Code backend fixes it on its own side (Tasks 10 and 13).
+  Fixing pi is left out because pi is not installed on this machine, so the behaviour of
+  `--tools ""` cannot be verified — and shipping an unverified change to the working
+  backend to match a verified one is the wrong trade.
 
 - **Record the resolved binary alongside the bare command** (from the Task 4 quality review).
   `_run` traces `command` as the bare `git status` while executing `C:\...\git.exe status`.
