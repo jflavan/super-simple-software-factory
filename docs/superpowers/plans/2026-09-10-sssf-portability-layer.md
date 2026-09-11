@@ -1673,6 +1673,34 @@ its session state into a directory named after the other backend. Rename it to `
 which is backend-neutral and matches what the directory actually holds. It is a runtime path
 under `data_dir`, not a tracked artifact, so nothing depends on the old name.
 
+**Also carried over from the Task 12 review — do this as part of this task.** `_event_forwarder`'s
+`forward` callback runs inside the backend's stream loop with no `try/except` anywhere on the
+path, so any exception a tracker raises while parsing a malformed event terminates the whole
+agent run. Tracing is observability and must never be able to kill the work it observes. The
+specific crashes found were fixed inside `agent_cc`'s tracker, but the systemic gap belongs
+here — wrap the loop body so a bad event costs one trace row, not the run:
+
+```python
+    def forward(event: dict) -> None:
+        try:
+            records = tracker.observe(event)
+        except Exception as error:                  # noqa: BLE001 — see below
+            # A tracker parses a subprocess's stdout. Malformed JSON is the
+            # subprocess's problem, not a reason to abort work that is otherwise
+            # going fine — so the failure is recorded and the run continues.
+            run.tracer.event(EventRecord(adw_id=run.adw_id, phase_id=phase.phase_id,
+                                         type="log", name="tool_trace_failed",
+                                         payload={"agent": agent_name,
+                                                  "error": str(error)[:500]}))
+            return
+        for record in records:
+```
+
+with the existing `EventRecord` emission as the loop body. The bare `except Exception` is
+deliberate and is the one place in this codebase where it is right: the alternative is
+enumerating every shape a backend's stream could take, which is exactly the guess that made
+this fatal in the first place.
+
 In `agents.py`, change the import on line 18 to:
 
 ```python
