@@ -39,9 +39,13 @@ agents:
       user: adws/adw_data/prompt_engineering/planner/user.md
     harness_engineering:
       - adws/adw_data/harness_engineering/subagents.ts   # a PATH, not a name
-    tools:
+    tools:                                # an extension's tools MUST be named here
       - read
       - bash
+      - subagent_create                   # ...or the extension loads and pi
+      - subagent_continue                 #    filters its tools out, silently
+      - subagent_list
+      - subagent_remove
     writes:                               # the boundary; omit for unrestricted
       - specs/
 ```
@@ -190,7 +194,7 @@ agents:
   - name: planner
     writes: [specs/]
   - name: documenter
-    writes: [app_docs/, docs/, "**/*.md", "*.md"]
+    writes: [app_docs/, docs/, "**/*.md"]
 ```
 
 **The session runtime under `data_dir` is always writable, for every agent.**

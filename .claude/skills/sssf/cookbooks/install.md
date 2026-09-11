@@ -179,18 +179,28 @@ Everything else lives in the two frameworks it names.
 
 If every technology in the stack already has a framework module, a new stack is
 **one file and no registration**. Make a directory under `templates/profiles/`
-and put a `profile.yaml` in it:
+and put a `profile.yaml` in it, naming only frameworks that are registered
+today — `dotnet` and `sveltekit`:
 
 ```yaml
-name: dotnet-vue
-description: ASP.NET Core + EF Core + Vue repositories.
-frameworks: [dotnet, vue]
+name: sveltekit-only
+description: A SvelteKit front end with no .NET behind it.
+frameworks: [sveltekit]
 ```
 
 `registry._discover` globs `*/profile.yaml`, so it is visible to `install.py`
-and to `--profile dotnet-vue` immediately. Nothing imports it, nothing lists
-it, and no shared file changes. That is the cheap path, and it is the one to
-check for before writing any Python.
+and to `--profile sveltekit-only` immediately. Nothing imports it, nothing
+lists it, and no shared file changes. That is the cheap path, and it is the one
+to check for before writing any Python.
+
+**Naming a framework that is not registered breaks every install, not just
+this profile.** `_discover` constructs a `CompositeProfile` for *every*
+`*/profile.yaml` it finds, and `install.py` calls `registry.names()` while it
+is still building its `--help` text — so one bad file exits with
+`unknown framework 'vue' - available: dotnet, sveltekit` before any flag is
+parsed, taking `--doctor` and `--no-profile` down with it. If the stack needs
+a technology nothing implements yet, write the framework module first: that is
+"Adding a framework" below, and the YAML is its last step, not its first.
 
 ## Adding a framework
 

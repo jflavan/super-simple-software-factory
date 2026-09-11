@@ -66,7 +66,7 @@ mkdir -p .claude/skills
 cp -r /path/to/super-simple-software-factory/.claude/skills/sssf .claude/skills/
 
 # 2. stamp the factory (run from the target repo ROOT, the cwd is where everything lands)
-uv run .claude/skills/sssf/scripts/install.py    # stamps, then probes and wires a stack profile
+uv run .claude/skills/sssf/scripts/install.py    # probes for a stack profile, stamps, then wires it
 cp .env.sample .env                              # then set OPENROUTER_API_KEY
 pi --version                                     # confirm pi is on PATH, or set PI_PATH in .env
 git init && git commit --allow-empty -m init     # chains that end in a commit phase need a repo
@@ -80,7 +80,7 @@ just obs                   # the trace UI, needs bun
 uv run adws/adw_prompt.py "reply with a one-line summary of this repo" --agent scout
 ```
 
-A bare install does two things. It **stamps** the factory — modules, starter ADWs, roster, prompts — and then it **probes** your repo and applies a matching [stack profile](#stack-profiles), which generates this repo's real quality commands, gate wiring, and prompt overlay. Three flags steer that second half:
+A bare install does two things. It **probes** your repo for a matching [stack profile](#stack-profiles), then **stamps** the factory — modules, starter ADWs, roster, prompts — and finally uses what it probed to generate this repo's real quality commands, gate wiring, and prompt overlay. Detection runs first deliberately: stamping writes a `justfile` into a repo that has none, and a probe running after that would report the factory's own recipes as if they were yours. Three flags steer the profile half:
 
 | Flag | What it does |
 |---|---|
@@ -110,7 +110,7 @@ Or simply start the run again. New installations are unaffected.
 already exist, so installing a newer skill into a repo that already has `adws/` would
 leave the old runtime in place while generation writes the new files beside it — a
 factory that reports itself wired and enforces nothing. The installer checks three
-symbols first and exits non-zero naming the stale module:
+symbols before it generates anything, and exits non-zero naming the stale module:
 
     adws/adw_modules/quality.py   needs _import_generated_blocks
     adws/adw_modules/gates.py     needs profile_gates
@@ -194,12 +194,12 @@ The mechanism is composable on purpose, because whole-stack profiles multiply. A
 | Piece | Where | What it owns |
 |---|---|---|
 | **Framework** | `templates/profiles/frameworks/<name>.py` | one technology: how to find it, what to run, what to gate, what to tell the agents |
-| **Profile** | `templates/profiles/<dir>/profile.yaml` | four lines naming which frameworks a stack is made of |
-| **Driver** | `templates/profiles/composite.py` | generic composition. It contains no framework name at all, and a test greps for one |
+| **Profile** | `templates/profiles/<dir>/profile.yaml` | three lines naming which frameworks a stack is made of, of which only `frameworks:` is required |
+| **Driver** | `templates/profiles/composite.py` | generic composition. No framework name appears anywhere in its code — a test strips the comments and docstrings and greps the rest |
 
 A framework module exposes eight names — `NAME`, `GATE_MODULE`, `OVERLAY`, `matches`, `detect`, `blocks`, `describe`, `gate_wiring` — and **never imports another framework**. Everything shared goes through `probes.py` (finding things) and `emit.py` (writing things).
 
-**Adding a stack is one YAML file** dropped in its own directory beside the others; `registry` globs `*/profile.yaml`, so there is nothing to register. Adding a *technology* is four things: the framework module, its gate module in `profiles/gates/`, its prompt fragment in `profiles/prompts/`, and two lines in `frameworks/__init__.py`. The acceptance test for this design adds a third framework in a 64-line module (`tests/fake_framework.py`) without changing `probes.py`, `emit.py`, `composite.py`, `registry.py`, or `facts.py` — the registration tuple is the only shared line it touches, and that is the whole claim.
+**Adding a stack is one YAML file** dropped in its own directory beside the others; `registry` globs `*/profile.yaml`, so there is nothing to register. Adding a *technology* is four things: the framework module, its gate module in `profiles/gates/`, its prompt fragment in `profiles/prompts/`, and two lines in `frameworks/__init__.py`. The acceptance test for this design adds a third framework in a 64-line module (`tests/fake_framework.py`) without changing `probes.py`, `emit.py`, `composite.py`, `registry.py`, or `facts.py` — the two registration lines in `frameworks/__init__.py` are the only shared lines it touches, and that is the whole claim.
 
 A profiled install writes three files and stamps one more per framework:
 
@@ -241,7 +241,7 @@ defaults:
 
 doc_policy:                        # optional; empty means the doc_policy gate never fires
   - when: "apps/api/**/Auth*.cs"   # a changed file matching this...
-    require: ["docs/AUTH.md"]      # ...means one of these must change too
+    require: ["docs/AUTH.md"]      # ...obliges EVERY entry here to change too
 
 agents:
   - name: planner
@@ -328,7 +328,7 @@ Determinism is wired into every step. Agents must return a specific structure, e
 
 Gates verify claims, never predictions. Nobody knows which files an agent will touch before it finishes, so gates run **after** the fact against the envelope's own declarations: `artifacts_exist`, `files_non_empty`, `json_parses`, `diff_matches_claims`, `verdict_consistent`, `tests_pass(...)`. A gate is a callable with the signature `gate(envelope, run) -> GateReport`, one `check(item, ok, note)` per thing it examined, so a green gate tells you *what* it verified.
 
-Two more come from outside `gates.py`. **`doc_policy`** is configured rather than coded: each rule in `sssf.config.yaml` says that a change matching one glob requires a change matching another, so "touching auth means updating `docs/AUTH.md`" is four lines of YAML instead of a function. **`profile_gates()`** splats in whatever your [stack profile](#stack-profiles) generated — the EF migration triad, a CSP check, an `.env.example` sync. Every `BuildOutput` phase in every shipped ADW runs `[diff_matches_claims, doc_policy, *profile_gates()]`, and a new ADW should too.
+Two more are in `gates.py` but are not written there. **`doc_policy`** is a function whose *rules* are configured rather than coded: each rule in `sssf.config.yaml` says that a change matching one glob requires changes matching every glob it names, so "touching auth means updating `docs/AUTH.md`" is four lines of YAML instead of a new function. **`profile_gates()`** splats in whatever your [stack profile](#stack-profiles) generated — the EF migration triad, a CSP check, an `.env.example` sync. Every `BuildOutput` phase in every shipped ADW runs `[diff_matches_claims, doc_policy, *profile_gates()]`, and a new ADW should too.
 
 When JSON does not parse or a gate returns violations, **nothing restarts**. The harness re-prompts the same session with a correction naming exactly what was wrong, and the context window stays intact. Pi treats `--session-id` as create-or-continue, so running an agent and continuing it are the same call. A cold restart throws away everything the agent learned. A correction costs one message.
 
@@ -393,7 +393,7 @@ super-simple-software-factory/          # the deployable factory, and nothing el
             ├── facts.py                #   the typed vocabulary a probe reports in
             ├── probes.py               #   shared "how do I find it" helpers
             ├── emit.py                 #   shared "how do I write it" helpers
-            ├── composite.py            #   the generic driver, no framework names
+            ├── composite.py            #   the generic driver, no framework names in code
             ├── registry.py             #   globs */profile.yaml, so nothing registers
             ├── frameworks/*.py         #   one module per technology
             ├── prompts/*.md            #   one overlay fragment per technology
@@ -424,7 +424,7 @@ uv run adws/adw_*.py "<prompt or path/to/prompt.md>" [--config adws/adw_sssf_con
 | `adw_build_test` | builder, code(test), bounded fix loop | there is a fast-tier suite to satisfy |
 | `adw_build_review` | builder, reviewer, bounded revise loop | "is this what was asked for" matters more than "does it run" |
 | `adw_plan_build_test` | plan, build, code(test), git(commit) | the standard chain |
-| `adw_plan_build_test_quality` | same, plus one full-tier pass after the loop | the slow checks (Docker, integration) have to pass before the commit |
+| `adw_plan_build_test_quality` | same, plus one every-tier pass after the loop | the slow checks (Docker, integration) have to pass before the commit |
 | `adw_document` | code(git diff), documenter | write up what just shipped |
 | `adw_simple_sdlc` | plan, build, test, review, document | the work is real and its shape is not obvious |
 
@@ -490,7 +490,7 @@ Where to start, roughly in the order that pays off fastest:
 | Your roster | `adws/adw_sssf_config/sssf.config.yaml` | Models, thinking levels, tools, what each agent is allowed to write, and the `doc_policy` rules |
 | Your chains | `adws/adw_*.py` | Copy the closest workflow and edit the phase list. They are 40 to 180 lines on purpose |
 | Your definition of done | `adws/adw_modules/gates.py`, `gates_<framework>.py`, `profile_gates.py`, `doc_policy:` | Four doors into one idea. A hand-written gate is one function in `gates.py`. A stack gate lives in `gates_<framework>.py` and **survives re-install**. `profile_gates.py` is the generated wiring — delete a line to stop enforcing one, and know it comes back. `doc_policy:` in the roster is the one you configure instead of code |
-| Your stack | `templates/profiles/` in the skill | A new stack is one `profile.yaml`. A new technology is one framework module plus its gate and prompt files. This is where a fix goes if you want it in every repo you stamp |
+| Your stack | `templates/profiles/` in the skill | A new stack is one `profile.yaml` naming frameworks that already exist. A new technology is one framework module, its gate and prompt files, and two registration lines in `frameworks/__init__.py`. This is where a fix goes if you want it in every repo you stamp |
 | Your agent capabilities | `adws/adw_data/harness_engineering/` | Pi extensions, a different set per agent if that is what the job needs |
 
 And what it deliberately does not do. It runs on your current branch. There is no sandbox, no branch per run, no merge step, no cloud, and no human-in-the-loop approval phase. Those are the obvious next things to build. They are left out so the core stays small enough to read in one sitting, which is the only reason you would trust it enough to change it.

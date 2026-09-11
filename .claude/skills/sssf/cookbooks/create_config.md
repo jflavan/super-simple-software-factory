@@ -35,7 +35,8 @@ observability:
 
 doc_policy:                        # optional; empty means the doc_policy gate never fires
   - when: "apps/api/**/Auth*.cs"   # a changed file matching this...
-    require: ["docs/AUTH.md"]      # ...obliges a change matching one of these
+    require: ["docs/AUTH.md"]      # ...obliges EVERY entry here to change too
+                                   # (require is a conjunction, not a menu)
 
 agents:
   - name: planner                  # ADW scripts name agents, never models
@@ -58,12 +59,16 @@ agents:
       user: adws/adw_data/prompt_engineering/scout/user.md
     tools:                         # optional allowlist — omit the key entirely for all tools
       - read
+      - grep
+      - find
+      - ls
       - bash
+      - write                      # so its findings file lands without a bash heredoc
 ```
 
 Every agent entry merges over `defaults`, so an entry only states what differs.
 
-**Pi has seven builtin tools**, not four: `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`. The last three are **off** in bare pi, so an agent that does not name them shells out through `bash` to do the same work — which is why the starter roster sets all seven on `defaults` and lets each agent narrow. The shipped `scout` is the pattern: `[read, grep, find, ls, bash, write]` — `write` only so its findings file lands without a bash heredoc — while the builder inherits the lot.
+**Pi has seven builtin tools**, not four: `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`. The last three are **off** in bare pi, so an agent that does not name them shells out through `bash` to do the same work — which is why the starter roster sets all seven on `defaults` and lets each agent narrow. The shipped `scout` is the pattern: `[read, grep, find, ls, bash, write]` — `write` only so its findings file lands without a bash heredoc — **plus the four `subagent_*` tools its extension registers**, because an extension's tools are filtered out unless the agent names them too. The builder declares its own seven-entry list rather than inheriting; inheriting is what an agent that omits the key does.
 
 **`tools` is a capability list. `writes` is the boundary.** They are not the same thing and the difference matters: `bash` runs anything and `write` reaches any path, so "this agent changes nothing" cannot be expressed with `tools`. `writes` is a glob allowlist checked in code after every call, and anything outside it is rolled back and fails the phase. **An agent that omits `writes` is unrestricted** — so a new agent added without one can rewrite your repo. State it deliberately, even when the answer is "everything".
 

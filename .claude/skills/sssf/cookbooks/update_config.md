@@ -101,7 +101,7 @@ Then name the agent in an ADW's `REQUIRED_AGENTS` and call it.
 
 ## Add a documentation contract
 
-`doc_policy` is a top-level key in this same file, and the one gate an operator configures rather than codes. Each rule says that a change matching `when` obliges a change matching one of `require`:
+`doc_policy` is a top-level key in this same file, and the one gate an operator configures rather than codes. Each rule says that a change matching `when` obliges a change matching **every** entry in `require`:
 
 ```yaml
 doc_policy:

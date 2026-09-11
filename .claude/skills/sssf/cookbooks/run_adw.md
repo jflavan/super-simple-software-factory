@@ -30,12 +30,18 @@ The chain says *what runs*; the config says *who runs it*. **If the engineer ref
 There is no recipe for this in the stamped `justfile` — it ships deliberately small, and a `rosters` recipe is one of the extras on the `example` branch. Read the configs off disk:
 
 ```bash
-ls adws/adw_sssf_config/*.yaml                      # every roster on disk
-grep -n "name:|model:" adws/adw_sssf_config/*.yaml  # who is in each, and on what
-head -3 adws/adw_sssf_config/sssf.frontier.config.yaml   # the names a roster answers to
+ls adws/adw_sssf_config/*.yaml                        # every roster on disk
+grep -nE "name:|model:" adws/adw_sssf_config/*.yaml   # who is in each, and on what
 ```
 
-That gives you the path to pass and who is in it. Read it from disk every time. Rosters are the engineer's to add, rename, and retune, so a name you remember from a doc is a guess.
+`-E` matters: plain `grep` is BRE, where `|` is a literal character and that
+pattern matches nothing at all.
+
+That gives you the path to pass and who is in it. Read it from disk every time.
+A roster that documents the names it answers to does so in its header comment,
+so `head -5 <file>` settles "which one did they mean" when there is more than
+one — the shipped default carries no aliases, because there is nothing to
+disambiguate it from. Rosters are the engineer's to add, rename, and retune, so a name you remember from a doc is a guess.
 
 They will rarely say `--config`. Treat any of these as naming a roster, then resolve it to a file:
 
@@ -125,4 +131,4 @@ A `kind="code"` quality phase fails differently from an agent phase, and the pha
 
 Tell the engineer, in order: which chain and which roster you launched (name the config whenever it was not the default), which phase is running now (or which failed), phase statuses in sequence, and for a failure the gate violations or the error verbatim. Remember **every phase defaults to `fail`** — a phase showing `fail` may simply never have completed; `queued` means it never started. Don't dress up a partial run as a success.
 
-For a visual live view, the visualizer app in the skill polls this same db — sessions as cards, runs as swim lanes, phases and tool calls drill-in. `just obs` boots both halves: the API on `:4600` and the Vite dev server on `:4601`. **Open `http://localhost:4601`** — 4600 answers JSON, not HTML. The sqlite queries above remain the headless equivalent.
+For a visual live view, the visualizer app in the skill polls this same db — sessions as cards, runs as swim lanes, phases and tool calls drill-in. `just obs` boots both halves: the API on `:4600` and the Vite dev server on `:4601`. **Open `http://localhost:4601`** — 4600 is the API, and it serves the UI only when a built `dist/` exists, which the skill does not ship. The sqlite queries above remain the headless equivalent.

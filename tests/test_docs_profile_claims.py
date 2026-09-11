@@ -130,11 +130,16 @@ def test_every_shipped_build_phase_carries_the_full_gate_set():
     while its six siblings used diff_matches_claims.
     """
     call = re.compile(r"output_type=BuildOutput[\s\S]{0,400}?\)\)")
-    seen = 0
+    declared = matched = 0
     offenders = []
     for path in sorted(ADWS.glob("adw_*.py")):
-        for match in call.finditer(path.read_text(encoding="utf-8")):
-            seen += 1
+        source = path.read_text(encoding="utf-8")
+        # Counted independently of the regex. A call reformatted past the 400
+        # characters the regex spans would otherwise drop silently out of
+        # coverage while this test went on passing.
+        declared += source.count("output_type=BuildOutput")
+        for match in call.finditer(source):
+            matched += 1
             body = match.group(0)
             missing = [name for name in ("gates.diff_matches_claims",
                                          "gates.doc_policy",
@@ -142,7 +147,10 @@ def test_every_shipped_build_phase_carries_the_full_gate_set():
                        if name not in body]
             if missing:
                 offenders.append(f"{path.name}: missing {missing}")
-    assert seen >= 8, f"only {seen} BuildOutput calls matched; the regex drifted"
+    assert matched == declared, (
+        f"{declared} BuildOutput calls exist, {matched} were inspected — "
+        f"{declared - matched} slipped past the regex and were never checked")
+    assert declared >= 8, f"only {declared} BuildOutput calls found; did adws/ move?"
     assert offenders == [], offenders
 
 
@@ -175,6 +183,17 @@ def test_the_gates_that_run_on_every_build_are_documented():
         assert required in defined, f"{required} is no longer exported by gates.py"
         for name, text in (("README.md", _readme()), ("SKILL.md", _text("SKILL.md"))):
             assert required in text, f"{name} never mentions {required}"
+
+    # Mentioning a gate is not the same as documenting it correctly. The first
+    # draft of this pass said doc_policy "comes from outside gates.py" — true of
+    # its rules, false of the function — and a bare substring check passed on it.
+    for name, text in (("README.md", _readme()),
+                       ("SKILL.md", _text("SKILL.md")),
+                       ("create_adw.md", _text("cookbooks", "create_adw.md")),
+                       ("update_adw.md", _text("cookbooks", "update_adw.md"))):
+        for wrong in ("not written in `gates.py`", "outside `gates.py`",
+                      "not in `gates.py`"):
+            assert wrong not in text, f"{name}: doc_policy IS defined in gates.py"
 
 
 def test_the_upgrade_docs_name_the_symbols_the_installer_checks_for():
@@ -216,12 +235,10 @@ def test_the_readme_documents_every_install_flag():
 def test_the_readme_and_skill_explain_the_two_quality_tiers():
     """`tier` decides what runs inside a bounded fix loop and what runs once
     after it. The word appeared nowhere in the README's 443 lines."""
-    import sys
-
-    sys.path.insert(0, str(ADWS))
+    # conftest.py already puts templates/adws on sys.path.
     from adw_modules.data_types import QualityTier
 
-    tiers = list(QualityTier.__args__)
+    tiers = list(getattr(QualityTier, "__args__", ()))
     assert set(tiers) == {"fast", "full"}, tiers
     for name, text in (("README.md", _readme()), ("SKILL.md", _text("SKILL.md"))):
         for tier in tiers:
@@ -269,3 +286,43 @@ def test_the_cost_of_a_third_framework_is_stated_accurately():
         assert quoted, f"{name} no longer quotes a line count"
         assert all(int(n) == lines for n in quoted), \
             f"{name} says {quoted}, fake_framework.py is {lines} lines"
+
+
+def test_the_composite_driver_names_no_framework_in_its_code():
+    """README.md claims it, so this is the test that makes the claim true.
+
+    The whole point of the driver is that it composes frameworks without
+    knowing any of them. The day `if framework.NAME == "dotnet"` appears in
+    `composite.py`, adding Angular stops being cheap and the architecture
+    quietly becomes a pile of special cases. Prose cannot defend that; the
+    file's own docstring says so and then has no enforcement behind it.
+
+    Docstrings and comments are stripped first — they legitimately name
+    frameworks while explaining why the code must not.
+    """
+    import ast
+    import sys
+
+    sys.path.insert(0, str(SKILL / "templates"))
+    from profiles import frameworks
+
+    tree = ast.parse((SKILL / "templates" / "profiles"
+                      / "composite.py").read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        body = getattr(node, "body", None)
+        if not isinstance(body, list) or not body:
+            continue
+        first = body[0]
+        if (isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant)
+                and isinstance(first.value.value, str)):
+            body.pop(0)
+            if not body:                       # a docstring-only body
+                body.append(ast.Pass())
+    code = ast.unparse(ast.fix_missing_locations(tree))   # also drops comments
+
+    names = [module.NAME for module in frameworks.FRAMEWORKS]
+    assert len(names) >= 2, names
+    offenders = [name for name in names if name in code]
+    assert offenders == [], (
+        f"composite.py's code names {offenders} — the driver is supposed to "
+        f"compose frameworks without knowing any of them")

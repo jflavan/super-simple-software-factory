@@ -33,7 +33,7 @@ Answer four questions, in order:
 
 4. **What does each call need to prove?** Pick gates per call from `gates.py`: `artifacts_exist`, `files_non_empty`, `json_parses`, `diff_matches_claims`, `verdict_consistent`, `tests_pass("cmd")` — or an inline one-off.
 
-   **Two gates are not written in `gates.py` and every repo-changing call needs them both.** `gates.doc_policy` reads the `doc_policy:` rules out of `sssf.config.yaml` — configured, not coded — and reports a violation when a changed file obliges a document that did not change. `gates.profile_gates()` **splats** (note the `*`) in whatever the stack profile generated into `adws/adw_modules/profile_gates.py`: the EF migration triad, a CSP check, an `.env.example` sync. Both are no-ops when nothing is configured and nothing was generated, so there is no reason to leave them off.
+   **Two gates in `gates.py` are not written there, and every repo-changing call needs them both.** `gates.doc_policy` is a function whose rules are configured, not coded: it reads `doc_policy:` out of `sssf.config.yaml` and reports a violation when a changed file obliges a document that did not change. `gates.profile_gates()` **splats** (note the `*`) in whatever the stack profile generated into `adws/adw_modules/profile_gates.py`: the EF migration triad, a CSP check, an `.env.example` sync. Both are no-ops when nothing is configured and nothing was generated, so there is no reason to leave them off.
 
    Every `BuildOutput` call in every shipped ADW is gated `[gates.diff_matches_claims, gates.doc_policy, *gates.profile_gates()]`. Match that, or the ADW you just wrote is quietly weaker than the ones shipping beside it.
 

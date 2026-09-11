@@ -34,7 +34,8 @@ GATES = {"PlanOutput": "[gates.artifacts_exist, gates.files_non_empty]",
          "ReviewOutput": "[gates.artifacts_exist, gates.verdict_consistent]",
          "DocumentOutput": "[gates.artifacts_exist, gates.files_non_empty]"}
 # An unknown agent returns GenericOutput, and nothing can be assumed about what
-# it claims - so it gets the one gate that is always true to check, and a TODO.
+# it claims - so it gets the one gate that is always safe to check. Sharpen it
+# by hand once you know what that agent's envelope actually declares.
 DEFAULT_GATES = "[gates.artifacts_exist]"
 
 HEADER = '''#!/usr/bin/env -S uv run
