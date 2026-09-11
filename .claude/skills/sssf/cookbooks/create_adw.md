@@ -6,15 +6,16 @@ Compose a new ADW script — a thin, deterministic Python workflow over agents a
 
 Answer four questions, in order:
 
-1. **What agents, in what order?** Pick from the roster (`adws/adw_sssf_config/sssf.config.yaml`). The starter six cover most chains:
+1. **What agents, in what order?** Pick from the roster (`adws/adw_sssf_config/sssf.config.yaml`). The starter five cover most chains:
 
 | Agent | Use when | Output type | Typical gates |
 |---|---|---|---|
 | `scout` | you need to FIND something first — read-only recon | `ScoutOutput` | `artifacts_exist` |
 | `planner` | the work needs a plan before code changes | `PlanOutput` | `artifacts_exist`, `files_non_empty` |
-| `builder` | code must change | `BuildOutput` | `diff_matches_claims` |
+| `builder` | code must change | `BuildOutput` | `diff_matches_claims`, `doc_policy`, `*profile_gates()` |
 | `reviewer` | the change must be confirmed to BE what was asked for | `ReviewOutput` | `artifacts_exist`, `verdict_consistent` |
 | *(no tester)* | verifying that it RUNS is a `kind="code"` phase over `quality.py` (running the commands generated into `quality_blocks.py`), not an agent | `QualityResult` → `as_envelope` | the exit code is the check |
+| *(no doc gate)* | the docs a change obliges are `doc_policy:` rules in the roster, not a phase — see `update_config.md` | — | `doc_policy` on the build call |
 | `documenter` | finished work needs a write-up (runs after a build, off the diff) | `DocumentOutput` | `artifacts_exist`, `files_non_empty` |
 | any agent, generic ask | one-off prompt, no special shape | `GenericOutput` | as needed |
 
@@ -28,7 +29,13 @@ Answer four questions, in order:
 
 3. **Does anything loop?** Test-fix cycles are bounded fix loops (see `update_adw.md`), not phase retries.
 
-4. **What does each call need to prove?** Pick gates per call from `gates.py`: `artifacts_exist`, `files_non_empty`, `json_parses`, `diff_matches_claims`, `tests_pass("cmd")` — or an inline one-off.
+   **Only the fast tier belongs inside the loop.** Every quality block carries a `tier`. `quality.run_tests(run)` runs the `fast` ones — cheap enough to pay for on every repair round. `quality.run_quality(run)` runs *every* tier and belongs once, after the loop, as final verification. If the tier you ask for has no blocks in it, `run_tests` **raises** rather than reporting green on an empty command list; tag at least one cheap block `fast`.
+
+4. **What does each call need to prove?** Pick gates per call from `gates.py`: `artifacts_exist`, `files_non_empty`, `json_parses`, `diff_matches_claims`, `verdict_consistent`, `tests_pass("cmd")` — or an inline one-off.
+
+   **Two gates are not written in `gates.py` and every repo-changing call needs them both.** `gates.doc_policy` reads the `doc_policy:` rules out of `sssf.config.yaml` — configured, not coded — and reports a violation when a changed file obliges a document that did not change. `gates.profile_gates()` **splats** (note the `*`) in whatever the stack profile generated into `adws/adw_modules/profile_gates.py`: the EF migration triad, a CSP check, an `.env.example` sync. Both are no-ops when nothing is configured and nothing was generated, so there is no reason to leave them off.
+
+   Every `BuildOutput` call in every shipped ADW is gated `[gates.diff_matches_claims, gates.doc_policy, *gates.profile_gates()]`. Match that, or the ADW you just wrote is quietly weaker than the ones shipping beside it.
 
 ## Step 2 — Ownership rules (the swim lanes depend on these)
 
@@ -45,7 +52,7 @@ Answer four questions, in order:
 uv run .claude/skills/sssf/scripts/make_adw.py --name review_docs --agents scout,builder
 ```
 
-Writes `adws/adw_review_docs.py`: one agent phase per name, chained by `previous=`, starter agents mapped to their output types, unknown agents to `GenericOutput`. It does NOT create config entries or prompt files — do that first (`update_config.md`), or `agents.validate()` will stop the run and tell you what's missing.
+Writes `adws/adw_review_docs.py`: one agent phase per name, chained by `previous=`, starter agents mapped to their output types and to the gate list that output type earns (a `BuildOutput` phase gets the full `diff_matches_claims` + `doc_policy` + `*profile_gates()` set), unknown agents to `GenericOutput` and a bare `artifacts_exist` you should sharpen by hand. It does NOT create config entries or prompt files — do that first (`update_config.md`), or `agents.validate()` will stop the run and tell you what's missing.
 
 ## The canonical skeleton
 
@@ -84,7 +91,8 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
     with run.phase(PhaseParams(name="build", kind="agent", owner="builder", retries=1,
                                description="Implement the plan exactly")) as ph:
         build = ph.call(AgentCall(output_type=BuildOutput, prompt=prompt, previous=plan,
-                                  gates=[gates.diff_matches_claims]))
+                                  gates=[gates.diff_matches_claims, gates.doc_policy,
+                                         *gates.profile_gates()]))
 
     with run.phase(PhaseParams(name="commit", kind="code", owner="git",
                                description="Commit the working tree")) as ph:
