@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import secrets
+import shutil
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -36,6 +37,24 @@ def operator_env() -> dict[str, str]:
     parts = [p for p in env.get("PATH", "").split(os.pathsep) if p and p != venv_bin]
     env["PATH"] = os.pathsep.join(parts)
     return env
+
+
+def resolve_argv(argv: list[str]) -> list[str]:
+    """Resolve argv[0] to an absolute executable path.
+
+    On Windows `npm` is `npm.cmd`, and a bare-name argv raises WinError 2 in
+    subprocess.run — which quality.py catches as an OSError and reports as
+    exit 127, making a PATH problem indistinguishable from a command that ran
+    and failed. shutil.which honours PATHEXT, so it finds the shim.
+
+    When nothing resolves, the argv is returned unchanged: that failure is a
+    genuinely missing binary, and the existing exit-127 path reports it
+    correctly with the real message.
+    """
+    if not argv:
+        return list(argv)
+    found = shutil.which(argv[0])
+    return [found, *argv[1:]] if found else list(argv)
 
 
 def new_id(length: int = 8) -> str:
