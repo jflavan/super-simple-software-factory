@@ -5,6 +5,7 @@ import ast
 import pytest
 from profile_fixtures import dotnet_svelte_repo, package, write
 
+from profiles import emit
 from profiles.composite import CompositeProfile
 
 
@@ -27,6 +28,44 @@ def test_an_unknown_framework_in_a_profile_fails_loudly(tmp_path):
     with pytest.raises(SystemExit) as error:
         _profile(tmp_path, frameworks="[dotnet, cobol]")
     assert "cobol" in str(error.value)
+
+
+def test_a_profile_that_is_not_yaml_names_the_file(tmp_path):
+    path = tmp_path / "profile.yaml"
+    path.write_text("name: [unclosed\n")
+    with pytest.raises(SystemExit, match="profile.yaml"):
+        CompositeProfile(path)
+
+
+def test_a_profile_that_is_not_a_mapping_names_the_file(tmp_path):
+    path = tmp_path / "profile.yaml"
+    path.write_text("- dotnet\n- sveltekit\n")
+    with pytest.raises(SystemExit, match="mapping"):
+        CompositeProfile(path)
+
+
+def test_a_frameworks_string_is_refused_rather_than_iterated(tmp_path):
+    """`frameworks: dotnet` used to iterate characters and report 'unknown framework d'."""
+    path = tmp_path / "profile.yaml"
+    path.write_text("name: x\nframeworks: dotnet\n")
+    with pytest.raises(SystemExit, match="non-empty list"):
+        CompositeProfile(path)
+
+
+def test_a_profile_declaring_no_frameworks_is_refused(tmp_path):
+    """It would generate a factory that checks nothing and report a clean install."""
+    path = tmp_path / "profile.yaml"
+    path.write_text("name: x\nframeworks: []\n")
+    with pytest.raises(SystemExit, match="non-empty list"):
+        CompositeProfile(path)
+
+
+def test_a_missing_name_falls_back_to_the_directory_with_hyphens(tmp_path):
+    directory = tmp_path / "dotnet_svelte"
+    directory.mkdir()
+    path = directory / "profile.yaml"
+    path.write_text("frameworks: [dotnet]\n")
+    assert CompositeProfile(path).NAME == "dotnet-svelte"
 
 
 def test_matching_requires_every_declared_framework(tmp_path):
@@ -133,6 +172,24 @@ def test_a_dry_run_writes_nothing_but_still_reports(tmp_path):
     assert not (repo / "adws" / "adw_modules" / "quality_blocks.py").exists()
 
 
+def test_a_dry_run_still_renders_so_doctor_can_prove_the_module_imports(tmp_path,
+                                                                       monkeypatch):
+    """The render is what runs ast.parse. Skipping it on a dry run would make
+    --doctor unable to report the one failure it exists to catch."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    dotnet_svelte_repo(repo)
+    profile = _profile(tmp_path)
+    calls = []
+    real = emit.render_blocks_module
+    monkeypatch.setattr(emit, "render_blocks_module",
+                        lambda *a, **k: calls.append(1) or real(*a, **k))
+
+    profile.generate(profile.detect(repo), repo, write=False)
+
+    assert calls == [1]
+
+
 def test_two_frameworks_emitting_the_same_block_name_stop_the_install(tmp_path,
                                                                      monkeypatch):
     """A silently dropped block is a check that stopped running."""
@@ -149,7 +206,32 @@ def test_two_frameworks_emitting_the_same_block_name_stop_the_install(tmp_path,
     profile = _profile(tmp_path)
     with pytest.raises(SystemExit) as error:
         profile.generate(profile.detect(repo), repo, write=False)
-    assert "build-sln" in str(error.value)
+    message = str(error.value)
+    assert "build-sln (from dotnet)" in message
+    assert "build-sln (from sveltekit)" in message
+
+
+def test_a_case_only_block_name_clash_names_both_original_spellings(tmp_path,
+                                                                     monkeypatch):
+    """Folded matching is right (filesystems collide on case), but the message
+    must still name the real spellings or grepping for the reported name
+    ('build-sln') will never find the other one ('build-SLN')."""
+    from profiles.facts import QualityBlock
+    from profiles.frameworks import sveltekit
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    dotnet_svelte_repo(repo)
+    monkeypatch.setattr(sveltekit, "blocks", lambda facts, repo_facts: (
+        [QualityBlock(name="build-SLN", area="frontend", operation="build",
+                      argv=["npm", "run", "build"])], []))
+
+    profile = _profile(tmp_path)
+    with pytest.raises(SystemExit) as error:
+        profile.generate(profile.detect(repo), repo, write=False)
+    message = str(error.value)
+    assert "build-sln (from dotnet)" in message
+    assert "build-SLN (from sveltekit)" in message
 
 
 def test_gate_modules_lists_what_the_declared_frameworks_need_stamped(tmp_path):

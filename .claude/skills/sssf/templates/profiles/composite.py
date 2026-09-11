@@ -13,7 +13,6 @@ this file, the design has failed and the special case belongs in the framework.
 
 from __future__ import annotations
 
-from collections import Counter
 from pathlib import Path
 
 import yaml
@@ -26,17 +25,42 @@ BLOCKS_RELATIVE = "adws/adw_modules/quality_blocks.py"
 
 
 class CompositeProfile:
-    """One profile.yaml, and the frameworks it declares."""
+    """One profile.yaml, and the frameworks it declares.
+
+    Order follows the profile's `frameworks:` list everywhere except
+    `gate_modules()`, which sorts: reports and blocks read in the order the
+    profile declared, while the stamped-module set is order-free.
+    """
 
     def __init__(self, path: Path):
         self.path = Path(path)
-        config = yaml.safe_load(self.path.read_text(encoding="utf-8")) or {}
-        self.NAME: str = config.get("name", self.path.parent.name)
+        try:
+            config = yaml.safe_load(self.path.read_text(encoding="utf-8"))
+        except yaml.YAMLError as error:
+            # Named, because registry._discover builds one of these per
+            # profile directory: without the path, one bad file reads as
+            # "every profile is broken".
+            raise SystemExit(f"{self.path}: not valid YAML - {error}") from error
+        if not isinstance(config, dict):
+            raise SystemExit(f"{self.path}: a profile is a mapping with `name` "
+                             f"and `frameworks`, got {type(config).__name__}")
+
+        self.NAME: str = config.get("name") or self.path.parent.name.replace("_", "-")
         self.description: str = config.get("description", "")
+
+        declared = config.get("frameworks")
+        if not isinstance(declared, list) or not declared:
+            raise SystemExit(
+                f"{self.path}: `frameworks` must be a non-empty list, got "
+                f"{declared!r}. A profile with no frameworks matches nothing "
+                f"and would generate a factory that checks nothing.")
+        if not all(isinstance(name, str) for name in declared):
+            raise SystemExit(f"{self.path}: `frameworks` must be a list of names, "
+                             f"got {declared!r}")
         # get_framework raises SystemExit naming the unknown one, so a typo in
         # a profile fails at load with a readable message rather than an
         # AttributeError somewhere inside generation.
-        self.frameworks = [get_framework(n) for n in (config.get("frameworks") or [])]
+        self.frameworks = [get_framework(name) for name in declared]
 
     # ── detection ────────────────────────────────────────────────────────
     def matches(self, root) -> bool:
@@ -52,7 +76,7 @@ class CompositeProfile:
     def detect(self, root) -> ProfileFacts:
         root = Path(root)
         runner, recipes, recipes_source = probes.task_runner(root)
-        facts = ProfileFacts(
+        return ProfileFacts(
             profile=self.NAME,
             repo_root=str(root),
             task_runner=runner,
@@ -60,10 +84,8 @@ class CompositeProfile:
             recipes_source=recipes_source,
             default_branch=probes.default_branch(root),
             conventions=probes.conventions(root),
+            frameworks={f.NAME: f.detect(root) for f in self.frameworks},
         )
-        for framework in self.frameworks:
-            facts.frameworks[framework.NAME] = framework.detect(root)
-        return facts
 
     def describe(self, facts: ProfileFacts) -> list[str]:
         lines: list[str] = []
@@ -78,8 +100,12 @@ class CompositeProfile:
     # ── generation ───────────────────────────────────────────────────────
     def _collect(self, facts: ProfileFacts):
         blocks, unresolved = [], []
+        origin: dict[str, list[str]] = {}
         for framework in self.frameworks:
             emitted, notes = framework.blocks(facts.of(framework.NAME), facts)
+            for block in emitted:
+                origin.setdefault(block.name.casefold(), []).append(
+                    f"{block.name} (from {framework.NAME})")
             blocks += emitted
             unresolved += notes
 
@@ -87,15 +113,14 @@ class CompositeProfile:
         # and default macOS filesystems are case-insensitive: `test-Web` from
         # one framework and `test-web` from another resolve to one directory
         # and overwrite each other's log, past an exact-match guard.
-        clashes = sorted(name for name, count
-                         in Counter(b.name.casefold() for b in blocks).items()
-                         if count > 1)
+        clashes = {folded: names for folded, names in origin.items() if len(names) > 1}
         if clashes:
+            detail = "; ".join(f"{folded}: {', '.join(names)}"
+                               for folded, names in sorted(clashes.items()))
             raise SystemExit(
-                f"profile {self.NAME!r}: two frameworks emitted the same block "
-                f"name(s): {', '.join(clashes)}. Block names are how the trace "
-                f"tells checks apart, so this is stopped rather than resolved by "
-                f"dropping one.")
+                f"profile {self.NAME!r}: two blocks share one name (and a block "
+                f"name is its artifact directory, so they would overwrite each "
+                f"other's evidence): {detail}")
         return blocks, unresolved
 
     def generate(self, facts: ProfileFacts, root, write: bool = True) -> GenerationReport:
