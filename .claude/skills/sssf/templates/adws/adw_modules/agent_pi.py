@@ -143,8 +143,8 @@ class ToolCallTracker:
 
     pi announces a call as a `toolCall` content block, then emits
     tool_execution_start / _update / _end for it. Only the end carries the
-    result, so that is where a record is emitted — one trace event per real
-    tool call, the moment it returns, instead of three shapeless ones.
+    result, so that is where a record is emitted — the record for the one
+    real tool call that just returned, instead of three shapeless ones.
 
     The record carries the call's real span (`started_at`/`ended_at`), which the
     tracer writes to columns so the UI can lay tool calls on a time axis without
@@ -154,21 +154,27 @@ class ToolCallTracker:
     def __init__(self) -> None:
         self._open: dict[str, dict] = {}
 
-    def observe(self, event: dict) -> Optional[dict]:
-        """Returns the record for a finished tool call, else None."""
+    def observe(self, event: dict) -> list[dict]:
+        """Returns the records for any tool calls that finished on this event.
+
+        A list, not an optional single record: Claude Code can close several
+        calls in one message, and both backends have to normalize to the same
+        shape for agents._event_forwarder to stay backend-agnostic. pi closes
+        at most one at a time, so this is [] or a single-element list.
+        """
         etype = event.get("type", "")
         if etype == "message_end":
             for block in event.get("message", {}).get("content", []) or []:
                 if isinstance(block, dict) and block.get("type") == "toolCall":
                     self._announce(block.get("id"), block.get("name"),
                                    block.get("arguments"))
-            return None
+            return []
         if etype == "tool_execution_start":
             self._announce(event.get("toolCallId"), event.get("toolName"),
                            event.get("args"))
-            return None
+            return []
         if etype != "tool_execution_end":
-            return None
+            return []
 
         call_id = str(event.get("toolCallId") or "")
         opened = self._open.pop(call_id, {})
@@ -190,7 +196,7 @@ class ToolCallTracker:
             record["duration_ms"] = int((time.monotonic() - opened["clock"]) * 1000)
         if opened.get("started_at"):
             record["started_at"] = opened["started_at"]
-        return record
+        return [record]
 
     def _announce(self, call_id, tool, args) -> None:
         """First sighting starts the clock; a later sighting only fills gaps."""
