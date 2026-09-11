@@ -2051,6 +2051,18 @@ git commit -m "docs: record live verification of the Claude Code backend"
 
 ---
 
+## Deferred improvements
+
+Raised during review, deliberately out of scope for this plan. Recorded so they are not lost.
+
+- **Record the resolved binary alongside the bare command** (from the Task 4 quality review).
+  `_run` traces `command` as the bare `git status` while executing `C:\...\git.exe status`.
+  Two machines that resolve the same bare name to different binaries therefore produce
+  identical traces, hiding the one fact needed to diagnose the divergence. The fix is small —
+  keep `command` bare for portability and add `resolved_command` to the tracer event payload
+  only — but it changes the trace schema's payload shape, so it belongs with the Part B
+  observability work rather than here.
+
 ## Done criteria
 
 - [ ] `uv run pytest tests/ -v` passes, 55 tests.
