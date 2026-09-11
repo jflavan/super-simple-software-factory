@@ -4164,7 +4164,21 @@ and extend `generate` to write the second file:
 
 ```python
     def generate(self, facts: ProfileFacts, root, write: bool = True) -> GenerationReport:
-        """Facts in, files out. `write=False` is the --doctor dry run."""
+        """Facts in, files out. `write=False` is the --doctor dry run.
+
+        KEEP this docstring and the comment below — Task 10 earned them and an
+        earlier draft of this task reverted both.
+
+        Write ORDER is load-bearing. `quality_blocks.py` is what `quality.py`
+        treats as "a profile generated this repo", and `gates.profile_gates()`
+        treats a missing `profile_gates.py` as "no profile, no stack gates" and
+        returns []. So if blocks landed first and the gates write then failed,
+        the repo would run its quality blocks green with every stack gate
+        silently unenforced — a factory that looks installed and checks less
+        than it says. Gates first means a half-written install has no blocks
+        either, which reads as "not installed" rather than "installed and
+        quietly weaker".
+        """
         blocks, unresolved = self._collect(facts)
         wirings = self._wirings(facts)
         # Rendered unconditionally, written only when asked. render_* runs an
@@ -4176,8 +4190,12 @@ and extend `generate` to write the second file:
         gates_text = emit.render_gates_module(facts, wirings)
         written: list[str] = []
         if write:
-            emit.write_file(root, BLOCKS_RELATIVE, blocks_text, written)
+            # Gates BEFORE blocks. See the docstring: blocks are the marker
+            # that a profile ran, gates are silently optional to the loader,
+            # so a failure between the two must leave the weaker-looking state,
+            # not the quieter one.
             emit.write_file(root, GATES_RELATIVE, gates_text, written)
+            emit.write_file(root, BLOCKS_RELATIVE, blocks_text, written)
         return GenerationReport(profile=self.NAME, files=written, blocks=blocks,
                                 gates=[w.name for w in wirings], unresolved=unresolved)
 ```
