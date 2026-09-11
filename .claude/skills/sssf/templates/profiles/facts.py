@@ -59,6 +59,11 @@ class ProfileFacts(BaseModel):
     repo_root: str
     task_runner: str = ""                               # "just", or "" if none
     recipes: list[str] = Field(default_factory=list)    # recipe names the runner knows
+    # Where `recipes` came from. A runner that REFUSED the file is not the same
+    # as one that is not installed: the first means the offline parser is
+    # reading a file the runner itself rejects, so every recipe it finds may be
+    # a command that cannot run. --doctor prints this.
+    recipes_source: str = ""
     default_branch: str = "main"
     conventions: list[str] = Field(default_factory=list)  # CLAUDE.md, AGENTS.md, dirs...
     frameworks: dict[str, FrameworkFacts] = Field(default_factory=dict)
