@@ -26,6 +26,13 @@ defaults:
   # the session runtime under data_dir — context_handoff/, envelopes, prompts,
   # raw output. Every agent can always write its own report; `writes: []` means
   # read-only with respect to the repo, not mute.
+  #
+  # Glob shapes, same engine as doc_policy: `**/` matches zero or more
+  # directories, so `**/*.md` includes files at the repo root, not just nested
+  # ones. A trailing `/` is a literal directory prefix and disables glob
+  # characters within it — `adws/adw_modules/` matches everything under that
+  # directory as plain text, `*` and `?` included. A bare `**` grants
+  # everything and should be treated like `writes: null`.
   protected_files:
     - adws/adw_modules/
     - adws/adw_sssf_config/
@@ -35,6 +42,19 @@ defaults:
 observability:
   db: adws/adw_data/sssf.db        # tracer writes here directly; the UI polls it
   poll_ms: 500                     # visualizer live-poll cadence
+
+# Optional documentation contract. Empty means the doc_policy gate never fires.
+# `when` and each `require` are path globs: `*` stops at a directory separator,
+# `**` crosses them, a trailing `/` is a directory prefix. A rule reports a
+# violation when a changed file matches `when` and no changed file matches the
+# requirement — the agent is then asked to update the document, in the same
+# session, with its context intact.
+#
+# doc_policy:
+#   - when: "apps/api/**/Auth*.cs"
+#     require: ["docs/AUTH.md"]
+#   - when: "apps/web/src/**"
+#     require: ["docs/ARCHITECTURE.md"]
 
 agents:
   - name: planner

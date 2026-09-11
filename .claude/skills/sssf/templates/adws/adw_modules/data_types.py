@@ -131,7 +131,12 @@ class DocumentOutput(EnvelopeBase):
 # ── Deterministic quality blocks ─────────────────────────────────────────────
 
 QualityArea = Literal["frontend", "backend"]
-QualityOperation = Literal["lint", "typecheck", "build"]
+QualityOperation = Literal["lint", "typecheck", "build", "test"]
+# Which pass a block belongs to. `fast` runs inside bounded fix loops, where a
+# slow block would multiply its cost by the retry count; `full` adds the blocks
+# that need a service to be up (a Testcontainers suite needs Docker) and runs
+# only in final verification.
+QualityTier = Literal["fast", "full"]
 
 
 class QualityCheckSpec(BaseModel):
@@ -142,6 +147,33 @@ class QualityCheckSpec(BaseModel):
     operation: QualityOperation
     argv: list[str]
     timeout_seconds: int = 120
+    tier: QualityTier = "fast"
+    # Where the command runs, relative to the repo root. A monorepo runs the
+    # same command in several packages, and every package manager spells its
+    # "somewhere else" flag differently (npm --prefix, pnpm --dir, yarn --cwd,
+    # bun not at all). A working directory is what all of them mean.
+    cwd: str = "."
+
+    @field_validator("cwd")
+    @classmethod
+    def _cwd_stays_inside_the_repo(cls, value: str) -> str:
+        """A block runs somewhere INSIDE the repo, on every platform.
+
+        Absolute paths are rejected rather than normalized: `Path(repo_root) /
+        "/elsewhere"` silently DISCARDS the repo root and succeeds in the wrong
+        directory, which is worse than failing. Backslashes are folded because
+        this field is generated but also hand-editable, and a Windows operator
+        typing `apps\\web` would get a file that works locally and breaks in
+        POSIX CI.
+        """
+        text = value.replace("\\", "/")
+        if text.startswith("/") or (len(text) > 1 and text[1] == ":"):
+            raise ValueError(f"cwd must be relative to the repo root, got {value!r}")
+        if ".." in text.split("/"):
+            # `root / "../sibling"` climbs out of the repo exactly as an
+            # absolute path does, only less visibly.
+            raise ValueError(f"cwd must not climb out of the repo, got {value!r}")
+        return text
 
 
 class QualityCheckResult(BaseModel):
@@ -343,9 +375,26 @@ class ObservabilityConfig(BaseModel):
     poll_ms: int = 500
 
 
+class DocPolicyRule(BaseModel):
+    """One documentation contract: touching `when` requires `require`.
+
+    Both sides are path globs (see utils.path_matches), so a rule can be as
+    broad as `apps/web/src/**` or as narrow as one file. The gate reports a
+    violation; it never edits anything, because which document a change needs
+    is a judgement the repo already made and wrote down here.
+    """
+
+    when: str                       # glob matched against changed files
+    require: list[str] = Field(default_factory=list)   # globs that must also change
+
+
 class SSSFConfig(BaseModel):
     defaults: ConfigDefaults = Field(default_factory=ConfigDefaults)
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
+    # Opt-in and empty by default. A documentation gate that fires on
+    # everything gets switched off wholesale within a week, so rules are added
+    # one at a time, deliberately, by the people they bind.
+    doc_policy: list[DocPolicyRule] = Field(default_factory=list)
     agents: list[AgentConfig] = Field(default_factory=list)
 
 

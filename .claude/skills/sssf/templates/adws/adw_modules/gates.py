@@ -10,11 +10,13 @@ Gates check what is mechanically checkable; plan quality is a reviewer's job.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import subprocess
 from pathlib import Path
 
 from .data_types import EnvelopeBase, GateReport
+from .utils import claimed_files, path_matches
 
 TAIL_CHARS = 1000        # command output kept as evidence on a failure
 
@@ -106,3 +108,69 @@ def tests_pass(command: str):
         return GateReport().check(command, ok, note)
     gate.__name__ = f"tests_pass({command})"
     return gate
+
+
+def doc_policy(envelope: EnvelopeBase, run) -> GateReport:
+    """The repo's documentation contract, as declared in sssf.config.yaml.
+
+    Config-driven on purpose: every repository's contract is different, and a
+    contract written as code is a contract only a programmer may change. This
+    gate reads YAML and compares paths — the policy itself never becomes code.
+
+    Silent when no rule triggers. A gate that records a check per rule per run
+    would bury the one violation that matters under a hundred green lines.
+
+    Judges the envelope's CLAIMS, like every gate here. An agent that omits a
+    file from `changed_files` is not caught by this — `permissions.enforce`
+    sees the real diff, but it runs after the gates and only checks what an
+    agent may WRITE, not what it admitted to. A documentation contract is a
+    prompt-level nudge with a mechanical check behind it, not a proof.
+    """
+    report = GateReport()
+    changed = claimed_files(envelope, run)
+    for rule in getattr(run.cfg, "doc_policy", []) or []:
+        triggers = [f for f in changed if path_matches(f, rule.when)]
+        if not triggers:
+            continue
+        trigger = (f"{triggers[0]} (+{len(triggers) - 1} more)" if len(triggers) > 1
+                   else triggers[0])
+        for required in rule.require:
+            present = any(path_matches(f, required) for f in changed)
+            report.check(
+                f"{required} (required by {rule.when})",
+                present,
+                f"required by {rule.when}, and in the change" if present
+                else f"{trigger} matches {rule.when}, which requires "
+                     f"{required} — not in the change")
+    return report
+
+
+def _import_profile_gates() -> list | None:
+    """The generated gate list, or None when no profile ever wrote one.
+
+    Mirrors `quality._import_generated_blocks`: existence is decided by
+    `find_spec`, BEFORE importing, so that every error raised *by* the
+    generated file stays fatal regardless of what it names. An earlier draft
+    of this function matched on `ModuleNotFoundError.name` instead, which
+    could not tell "profile_gates is absent" from "profile_gates imports
+    something else that is absent and happens to share its name" - and the
+    second case would silently fall back to an empty gate list. An empty gate
+    list is exactly as dangerous as quality.py's echo placeholders: it is a
+    definition of done that quietly stopped being enforced, only quieter,
+    because nothing here even admits it is fake.
+    """
+    if importlib.util.find_spec(f"{__package__}.profile_gates") is None:
+        return None
+    from .profile_gates import PROFILE_GATES
+    return list(PROFILE_GATES)
+
+
+def profile_gates() -> list:
+    """The stack gates a profile wired for this repo. Empty without one.
+
+    Spread into a phase's gate list: `gates=[gates.diff_matches_claims,
+    *gates.profile_gates()]`. An un-profiled repo gets an empty list and
+    behaves exactly as it did before profiles existed.
+    """
+    wired = _import_profile_gates()
+    return list(wired) if wired is not None else []

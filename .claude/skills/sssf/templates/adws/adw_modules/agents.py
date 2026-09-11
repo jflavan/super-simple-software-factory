@@ -108,6 +108,19 @@ def validate(cfg: SSSFConfig, required: list[str]) -> None:
 
 # ── execution ────────────────────────────────────────────────────────────────
 
+def profile_overlay(run) -> str:
+    """Stack guidance a profile generated for this repo, or nothing.
+
+    A variable rather than a rewritten prompt file: the prompts are where an
+    operator's own standards live, and an installer that overwrites them would
+    delete the most valuable thing in the stamped tree. Any prompt that wants
+    the overlay includes `{{profile_overlay}}`; one that does not, does not.
+    """
+    path = (Path(run.cfg.defaults.data_dir) / "prompt_engineering"
+            / "profile_overlay.md")
+    return path.read_text(encoding="utf-8") if path.is_file() else ""
+
+
 def execute(run, phase: Phase, call: AgentCall) -> EnvelopeBase:
     """One agent call: render prompts -> pi run -> typed parse -> gates -> envelope."""
     agent = resolve(run.cfg, phase.params.owner)
@@ -118,6 +131,7 @@ def execute(run, phase: Phase, call: AgentCall) -> EnvelopeBase:
         "prompt": call.prompt,
         "previous_envelope": call.previous.model_dump_json(indent=2) if call.previous else "(none)",
         "context_handoff_dir": str(run.context_handoff_dir),
+        "profile_overlay": profile_overlay(run),
     }
     system_text = prompts.render(agent.prompt_engineering.system, variables)
     user_text = prompts.render(agent.prompt_engineering.user, variables)

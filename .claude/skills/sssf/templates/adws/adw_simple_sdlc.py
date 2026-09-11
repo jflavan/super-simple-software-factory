@@ -91,13 +91,14 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
     with run.phase(PhaseParams(name="build", kind="agent", owner="builder",
                                description="Implement the plan exactly")) as ph:
         build = ph.call(AgentCall(output_type=BuildOutput, prompt=prompt, previous=plan,
-                                  gates=[gates.diff_matches_claims]))
+                                  gates=[gates.diff_matches_claims, gates.doc_policy,
+                                         *gates.profile_gates()]))
 
     test = None
     for i in range(1, MAX_FIX_LOOPS + 1):
         with run.phase(PhaseParams(name=f"test_{i}", kind="code", owner="quality",
-                                   description="Run the suite — a known command, so code runs "
-                                               "it and no agent has to rediscover it")) as ph:
+                                   description="Run the fast tier — known commands, so code runs "
+                                               "them and no agent has to rediscover them")) as ph:
             test = quality.run_tests(run)
             record(ph, test)
 
@@ -105,11 +106,12 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
             break
 
         with run.phase(PhaseParams(name=f"fix_{i}", kind="agent", owner="builder", retries=1,
-                                   description="Repair what the suite reported, from its "
+                                   description="Repair what the fast tier reported, from its "
                                                "verbatim output")) as ph:
             build = ph.call(AgentCall(output_type=BuildOutput, prompt=prompt,
-                                      previous=quality.as_envelope(test, "tests"),
-                                      gates=[gates.diff_matches_claims]))
+                                      previous=quality.as_envelope(test, "fast checks"),
+                                      gates=[gates.diff_matches_claims, gates.doc_policy,
+                                             *gates.profile_gates()]))
 
     review = None
     revised = False
@@ -125,14 +127,15 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
         with run.phase(PhaseParams(name=f"revise_{i}", kind="agent", owner="builder", retries=1,
                                    description="Close the reviewer's blocking findings")) as ph:
             build = ph.call(AgentCall(output_type=BuildOutput, prompt=prompt, previous=review,
-                                      gates=[gates.diff_matches_claims]))
+                                      gates=[gates.diff_matches_claims, gates.doc_policy,
+                                             *gates.profile_gates()]))
             revised = True
 
     # A revision edited code after the suite last ran, so the green light is
     # stale. Re-run it rather than commit on a result that predates the change.
     if revised and review is not None and review.approved:
         with run.phase(PhaseParams(name="retest", kind="code", owner="quality",
-                                   description="Re-run the suite — the revision changed code "
+                                   description="Re-run the fast tier — the revision changed code "
                                                "after the last green result")) as ph:
             test = quality.run_tests(run)
             record(ph, test)
@@ -144,7 +147,7 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
                 and review is not None and review.approved)
     if verified:
         with run.phase(PhaseParams(name="commit_build", kind="code", owner="git",
-                                   description="Land the code only now: green suite, approved review")) as ph:
+                                   description="Land the code only now: green fast tier, approved review")) as ph:
             commit(ph, build)
 
         with run.phase(PhaseParams(name="changes", kind="code", owner="git",
@@ -171,7 +174,7 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
             commit(ph, document)
 
     return run.finish(accepted=verified,
-                      reason="the suite or the review never came back clean")
+                      reason="the fast tier or the review never came back clean")
 
 
 if __name__ == "__main__":

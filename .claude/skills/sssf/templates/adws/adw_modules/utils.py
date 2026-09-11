@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import os
+import re
 import secrets
 import shutil
 import subprocess
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -119,3 +121,119 @@ def engineer_name() -> str:
     except OSError:
         pass
     return os.environ.get("USER", "engineer")
+
+
+@lru_cache(maxsize=512)
+def glob_to_regex(pattern: str) -> re.Pattern:
+    """Translate a path glob, with `*` stopping at a path separator.
+
+    fnmatch would let `*` cross `/`, which quietly widens every pattern:
+    `adws/adw_*.py` would match `adws/adw_data/sessions/x/y.py` as well as the
+    ADW scripts it means. `**` is the way to say "cross directories".
+
+    `**/` matches zero or more directories, so `**/*.md` covers `README.md` at
+    the root as well as `docs/a/b.md`. Requiring at least one directory there
+    is a trap: the pattern reads as "any markdown file anywhere" and every
+    author who writes it means that.
+
+    Cached because the same small set of patterns (`writes:`, `protected_files`,
+    `doc_policy`) is matched against every changed path, every run — this caches
+    the translation LOOP above, not just the resulting regex. `re.compile` has
+    its own cache, but that one is process-wide and shared with every regex any
+    module compiles, so it can be evicted by unrelated traffic; this cache is
+    ours alone.
+    """
+    out, i = [], 0
+    while i < len(pattern):
+        if pattern.startswith("**/", i):
+            out.append("(?:.*/)?")
+            i += 3
+        elif pattern.startswith("**", i):
+            out.append(".*")
+            i += 2
+        elif pattern[i] == "*":
+            out.append("[^/]*")
+            i += 1
+        elif pattern[i] == "?":
+            out.append("[^/]")
+            i += 1
+        else:
+            out.append(re.escape(pattern[i]))
+            i += 1
+    return re.compile("".join(out))
+
+
+def path_matches(path: str, pattern: str) -> bool:
+    """One path against one pattern: prefix, glob, or exact equality.
+
+    Backslashes are folded to forward slashes first, on BOTH sides. git
+    reports forward slashes on every platform, but an agent reporting
+    `changed_files` on Windows may not, and a permission check that silently
+    stops matching on one platform is the worst possible failure of a
+    permission check. The pattern gets the same fold because it is written by
+    the same operator on the same platform: a `protected_files` entry typed
+    with native Windows separators otherwise ends without a `/`, contains no
+    `*` or `?`, falls into the exact-equality branch, matches nothing, and
+    fails OPEN instead of protecting the path it names.
+    """
+    path = str(path).replace("\\", "/")
+    pattern = str(pattern).replace("\\", "/")
+    if pattern.endswith("/"):                      # directory prefix
+        return path.startswith(pattern)
+    if "*" in pattern or "?" in pattern:
+        return glob_to_regex(pattern).fullmatch(path) is not None
+    return path == pattern
+
+
+def repo_relative(path: str, repo_root: str) -> str:
+    """An agent's reported path, reduced to the repo-relative form rules use.
+
+    Envelopes carry whatever shape the model wrote: absolute, `./`-prefixed, or
+    already relative. Every rule in this system — `writes:`, `doc_policy`, the
+    stack gates — is written repo-relative, so the normalization happens once,
+    here, rather than in each of them slightly differently.
+    """
+    text = str(path).replace("\\", "/")
+    root = str(repo_root).replace("\\", "/").rstrip("/")
+    if root and text.startswith(root + "/"):
+        return text[len(root) + 1:]
+    return text[2:] if text.startswith("./") else text
+
+
+def claimed_files(envelope, run) -> list[str]:
+    """Every path an envelope CLAIMS to have changed, repo-relative.
+
+    Named for its epistemics, and deliberately not `changed_files` — that name
+    belongs to git_helper, which reports what git OBSERVED. A gate that mixes
+    the two up is checking the agent's homework against the agent's own answer
+    sheet.
+    """
+    return [repo_relative(f, run.repo_root)
+            for f in getattr(envelope, "changed_files", [])]
+
+
+def read_text(path, max_bytes: int | None = None) -> str:
+    """File text, or empty when the file is not there.
+
+    A gate reads files the change touched, and `changed_files` includes
+    DELETIONS — so "the file is gone" is an ordinary case, not an error.
+
+    Only absence is quiet. A PermissionError or a directory where a file was
+    expected propagates, because "the harness could not read the policy file"
+    is not a problem the agent can fix, and laundering it into a gate violation
+    asks the agent to fix it anyway.
+
+    `max_bytes` caps how much is actually read off disk. None (the default)
+    reads the whole file — every caller's behaviour before this parameter
+    existed. A gate that regex-scans a checked-in minified bundle has nothing
+    useful to say about it anyway, so a caller that expects to see such files
+    — a stack gate scanning "every changed source file" — should pass a
+    bound rather than loading megabytes of generated text per phase.
+    """
+    try:
+        if max_bytes is None:
+            return Path(path).read_text(errors="replace")
+        with open(path, "rb") as file:
+            return file.read(max_bytes).decode("utf-8", errors="replace")
+    except (FileNotFoundError, NotADirectoryError):
+        return ""

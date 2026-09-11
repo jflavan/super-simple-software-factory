@@ -1,0 +1,6 @@
+# A profile names the frameworks a stack is made of. Nothing else: the
+# frameworks own their own markers, recipes, gates and prompt fragments, so
+# pairing .NET with a different frontend is a file exactly this size.
+name: dotnet-svelte
+description: ASP.NET Core + EF Core + SvelteKit repositories.
+frameworks: [dotnet, sveltekit]

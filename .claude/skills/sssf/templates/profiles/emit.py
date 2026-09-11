@@ -1,0 +1,262 @@
+"""Turning facts into files. Shared by every framework, owned by none.
+
+Everything emitted is plain, readable, editable Python — a file an operator can
+open and correct is worth more than a clever indirection they cannot.
+
+The preference order encoded here, once, for all frameworks: a task-runner
+recipe the team already maintains beats a command composed from parts, because
+the recipe is what the humans run and the humans keep it working.
+"""
+
+from __future__ import annotations
+
+import ast
+from collections import Counter
+from collections.abc import Sequence
+from datetime import datetime, timezone
+from pathlib import Path
+
+from .facts import Frontend, GateWiring, ProfileFacts, QualityArea, QualityBlock
+
+# (package.json script, candidate recipe names, quality operation, block prefix)
+FrontendScript = tuple[str, list[str], str, str]
+
+# Commands that need a browser or a built app. Bound into a bounded fix loop
+# they multiply their cost by the retry count, which is the same reason a
+# Testcontainers suite is tagged `full`.
+SLOW_MARKERS = ("playwright", "cypress", "webdriver", " e2e", "e2e ")
+
+
+def _tier(frontend: Frontend, script: str) -> str:
+    """`full` for a command that needs a browser or a built app, else `fast`.
+
+    Keyed off the COMMAND, not the script name: a team can call anything
+    `test`, but `playwright test` and `vitest run` are not the same cost to
+    run inside a bounded fix loop.
+    """
+    command = frontend.scripts.get(script, "")
+    return "full" if any(marker in command.lower() for marker in SLOW_MARKERS) else "fast"
+
+BLOCKS_HEADER = '''"""GENERATED - do not expect edits here to survive a re-install.
+
+Written by `install.py --profile {profile}` at {stamp}.
+
+What was detected in this repository:
+{summary}
+
+This file is DATA: the list of commands this repo actually uses. It is plain
+Python, so correcting a wrong command is opening it and typing the right one.
+Re-probe after a restructure with `install.py --doctor`, which reports drift
+without writing, then re-install with --profile to rewrite this file.
+
+`tier="full"` means slow or service-dependent - a suite that needs Docker up.
+Full blocks run in run_quality() only, never inside a bounded fix loop.
+"""
+
+from .data_types import QualityCheckSpec
+
+BLOCKS = [
+{entries}]
+'''
+
+GATES_HEADER = '''"""GENERATED - do not expect edits here to survive a re-install.
+
+Written by `install.py --profile {profile}` at {stamp}.
+
+The stack gates, parameterized with what detection found in THIS repository.
+`gates.profile_gates()` loads this list; an un-profiled repo has no such file
+and gets an empty list instead.
+
+Each entry is a plain function of (envelope, run). To stop enforcing one,
+delete its line - the factory will not argue, and the next re-install will put
+it back.
+"""
+
+{imports}
+
+PROFILE_GATES = [
+{entries}]
+'''
+
+
+def recipe(repo: ProfileFacts, candidates: list[str],
+           name: str = "") -> tuple[list[str], str]:
+    """The first candidate task the runner actually knows, as an argv.
+
+    Returns `([], "")` when there is no runner or no candidate matches, which
+    is the caller's cue to compose a raw command instead.
+    """
+    if not repo.task_runner:
+        return [], ""
+    for candidate in candidates:
+        task = candidate.replace("{name}", name)
+        if task in repo.recipes:
+            return [repo.task_runner, task], f"recipe {repo.task_runner} {task}"
+    return [], ""
+
+
+def labels(directories: list[str]) -> dict[str, str]:
+    """A short, unique name per directory, for use in block names.
+
+    `apps/web` is `web` until a repo also has `packages/web`, at which point
+    both become their full path. Uniqueness matters: two blocks with one name
+    produce two trace rows nobody can tell apart, and overwrite each other's
+    artifacts.
+
+    The path transform is not injective — `a/b/web` and `a-b/web` both flatten
+    to `a-b-web` — so a surviving collision gets an index. Rare, but the
+    alternative is a duplicate-name abort that names the wrong subsystem.
+    """
+    plain = {d: (Path(d).name or "root") for d in directories}
+    counts = Counter(plain.values())
+    resolved = {directory: (label if counts[label] == 1
+                            else directory.replace("/", "-").strip("-.") or "root")
+                for directory, label in plain.items()}
+
+    seen: Counter[str] = Counter(resolved.values())
+    used: Counter[str] = Counter()
+    for directory, label in resolved.items():
+        if seen[label] > 1:
+            used[label] += 1
+            resolved[directory] = f"{label}-{used[label]}"
+    return resolved
+
+
+def script_blocks(frontends: list[Frontend], repo: ProfileFacts,
+                  scripts: list[FrontendScript],
+                  area: QualityArea = "frontend") -> tuple[list[QualityBlock], list[str]]:
+    """package.json scripts, as quality blocks. One implementation, every framework.
+
+    This is the function that makes a second frontend framework cheap: an
+    Angular package's `npm run build` becomes a block through exactly the code
+    a SvelteKit one does. Only WHICH packages to pass in, and which script
+    names to look for, differ.
+    """
+    blocks: list[QualityBlock] = []
+    unresolved: list[str] = []
+    label_of = labels([f.directory for f in frontends])
+    emitted_for: dict[str, int] = {f.directory: 0 for f in frontends}
+
+    for script, candidates, operation, prefix in scripts:
+        declaring = [f for f in frontends if f.has(script)]
+        if not declaring:
+            continue
+
+        # Candidates with no `{name}` placeholder are repo-wide by
+        # construction - a team names a package-specific recipe `test-web`
+        # and a repo-wide one `test-frontend`, never the reverse.
+        shared = [c for c in candidates if "{name}" not in c]
+        argv, source = recipe(repo, shared)
+        if argv and len(declaring) > 1:
+            # One repo-wide recipe covers every package that declares this
+            # script. Emitting it per package would run the same command N
+            # times, into N artifact directories holding one command's output.
+            blocks.append(QualityBlock(
+                name=f"{prefix}-frontend", area=area, operation=operation,
+                argv=argv, cwd=".", tier=(
+                    "full" if any(_tier(f, script) == "full" for f in declaring)
+                    else "fast"),
+                timeout_seconds=600,
+                source=f"{source} (covers {len(declaring)} package(s))"))
+            for frontend in declaring:
+                emitted_for[frontend.directory] += 1
+            continue
+
+        for frontend in declaring:
+            # The collision-aware label, NOT the bare directory name. Two
+            # packages both called `web` would otherwise resolve the same
+            # `check-{name}` recipe and emit two differently-named blocks
+            # running one identical command against one of them.
+            argv, source = recipe(repo, candidates,
+                                  name=label_of[frontend.directory])
+            blocks.append(QualityBlock(
+                name=f"{prefix}-{label_of[frontend.directory]}",
+                area=area, operation=operation,
+                argv=argv or [frontend.package_manager, "run", script],
+                # A recipe runs from the repo root, because that is where the
+                # task runner resolves its own paths from. A raw package-manager
+                # command runs inside the package it belongs to.
+                cwd="." if argv else frontend.directory,
+                tier=_tier(frontend, script), timeout_seconds=600,
+                source=source or f"{frontend.package_manager} script {script!r}"))
+            emitted_for[frontend.directory] += 1
+
+    for frontend in frontends:
+        if not emitted_for[frontend.directory]:
+            unresolved.append(
+                f"package {frontend.directory} declares none of "
+                f"{', '.join(s for s, *_ in scripts)} - nothing verifies it")
+    return blocks, unresolved
+
+
+def _stamp() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _safe(text: str) -> str:
+    """Make a discovered string safe to sit inside a generated docstring.
+
+    The one place `repr()` cannot protect. A docstring has no quoting, and
+    backslash escapes are still live inside it — so a package.json script key
+    of `build:\\Unit` is a truncated \\U escape, and one containing a triple
+    quote ends the docstring early. Both are legal JSON, and a branch name may
+    contain a quote too: git forbids spaces and backslashes in refs, not
+    quotes.
+    """
+    return text.replace("\\", "/").replace('"""', "'''")
+
+
+def _summary(facts: ProfileFacts, extra: list[str]) -> str:
+    lines = list(extra)
+    lines.append(f"  task runner: {facts.task_runner or '(none)'}")
+    lines.append(f"  default branch: {facts.default_branch}")
+    lines.append(f"  conventions: {', '.join(facts.conventions) or '(none found)'}")
+    return "\n".join(lines)
+
+
+def _entry(block: QualityBlock) -> str:
+    return ("    QualityCheckSpec(\n"
+            f"        name={block.name!r}, area={block.area!r}, "
+            f"operation={block.operation!r},\n"
+            f"        argv={block.argv!r},\n"
+            f"        cwd={block.cwd!r}, tier={block.tier!r}, "
+            f"timeout_seconds={block.timeout_seconds},\n"
+            f"    ),  # {block.source.replace(chr(10), ' ')}\n")
+
+
+def render_blocks_module(facts: ProfileFacts, blocks: list[QualityBlock],
+                         summary: Sequence[str] = ()) -> str:
+    text = BLOCKS_HEADER.format(
+        profile=_safe(facts.profile), stamp=_stamp(),
+        summary=_safe(_summary(facts, list(summary))),
+        entries="".join(_entry(b) for b in blocks))
+    # A module this process cannot parse is one the ADW runtime cannot import,
+    # an install later, with nothing pointing back here. Fail on this stack.
+    ast.parse(text)
+    return text
+
+
+def render_gates_module(facts: ProfileFacts, wirings: list[GateWiring]) -> str:
+    """Import only the gates that are actually wired, grouped one line per module."""
+    by_module: dict[str, list[str]] = {}
+    for wiring in wirings:
+        names = by_module.setdefault(wiring.module, [])
+        if wiring.name not in names:
+            names.append(wiring.name)
+    imports = "\n".join(f"from .{module} import {', '.join(sorted(names))}"
+                        for module, names in sorted(by_module.items()))
+    text = GATES_HEADER.format(
+        profile=_safe(facts.profile), stamp=_stamp(), imports=imports,
+        entries="".join(f"    {w.call},\n" for w in wirings))
+    ast.parse(text)
+    return text
+
+
+def write_file(root: Path | str, relative: str, text: str, written: list[str]) -> None:
+    path = Path(root) / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # newline="\n" pins LF even on Windows: Path.write_text applies universal-
+    # newline translation by default, which would write CRLF here and produce
+    # a whole-file diff on a re-install from the other platform.
+    path.write_text(text, encoding="utf-8", newline="\n")
+    written.append(str(path))

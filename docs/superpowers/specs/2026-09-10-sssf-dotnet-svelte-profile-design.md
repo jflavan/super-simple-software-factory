@@ -389,3 +389,100 @@ two regression tests now encode that rule rather than our assumptions about it.
 **Added:** `templates/adws/adw_trace.py`, `templates/adws/adw_plan_build_test_pr.py`,
 `templates/profiles/dotnet-svelte/{profile.yaml,detect.py,generate.py,gates/,prompts/}`,
 and the test suite for gates, detection, and generation.
+
+## 8b. Verified (Part B, 2026-09-11)
+
+Part B was implemented as 21 TDD tasks and verified live against `codec-chat`.
+No file in that repository was modified: `git status --porcelain` was empty
+before and after every step, and every writing step ran in a throwaway clone.
+
+### Detection
+
+`install.py --doctor`, run read-only against the real repository, classified it
+exactly. Five projects, both test roles, both frontends, the task runner, and
+four convention files — all confirmed against the repository's own contents.
+
+| Detected | Value |
+|---|---|
+| solution | `Codec.sln` |
+| app projects | `Codec.Api`, `Codec.ServiceDefaults`, `Codec.AppHost` |
+| unit tests | `Codec.Api.Tests` |
+| integration tests | `Codec.Api.IntegrationTests` |
+| frontends | `apps/web`, `apps/admin` (npm) |
+| task runner | `just`, 86 recipes, via `just --summary` |
+| conventions | `CLAUDE.md`, `AGENTS.md`, `CONTRIBUTING.md`, `.github/instructions/` |
+
+### The blocks it wired, and what happened when they ran
+
+Nine blocks, every one resolved to a `just` recipe the team already maintains.
+Run in a `--depth 1` clone with no `node_modules` installed:
+
+| Block | Command | Tier | Exit |
+|---|---|---|---|
+| `test-unit` | `just test-fast` | fast | 1 (dotnet 1454/1461 passed; the frontend legs failed) |
+| `test-integration` | `just test-api-integration` | full | **0** |
+| `build-sln` | `just build-sln` | fast | **0** |
+| `check-admin` | `just check-admin` | fast | 1 (`svelte-kit` not found) |
+| `check-web` | `just check-web` | fast | 1 (same) |
+| `test-admin` | `just test-admin` | fast | 1 (vitest cannot resolve its config) |
+| `test-web` | `just test-web` | fast | 1 (same) |
+| `build-admin` | `just build-admin` | fast | 1 (`vite` not found) |
+| `build-web` | `just build-web` | fast | 1 (same) |
+
+Every failure is the "fresh clone, no `npm install`" class. **None was a
+placeholder.** Nine `tool_call` rows reached the trace, each carrying the real
+argv and the real exit code — which is the property the 427 offline tests could
+not establish, because every one of them asserts on the *shape* of an argv and
+none on whether an operating system will launch it.
+
+`test-integration` returning 0 is worth stating plainly: the Testcontainers
+suite ran, against Docker, from a generated command, and passed.
+
+### Gates
+
+`ef_migration_triad`, `env_example_sync` and `sveltekit_csp` were all wired.
+
+**The CSP gate is the result live verification most clearly earned.** It found
+`apps/web/svelte.config.js` and `apps/admin/svelte.config.js` — because a
+review corrected the probe to look there *before* `src/hooks.server.ts`.
+SvelteKit documents CSP under `kit.csp.directives` in the config; the hook is
+the manual alternative. The original probe, which read only the hook, would
+have wired no CSP gate for either frontend and said nothing about it.
+
+### Overlay
+
+1381 bytes — comfortably inside the ~32KB Windows argv ceiling that the Part A
+plan flagged as a deferred risk. It names the four convention files rather than
+restating them.
+
+### Reproduced pre-existing defect
+
+`adw_quality.py` crashed on the first attempt with
+`UnicodeEncodeError: 'charmap' codec can't encode character '▶'` from
+`rich`'s renderer on a cp1252 console, and the run had to be repeated with
+`PYTHONUTF8=1 PYTHONIOENCODING=utf-8`. This is the defect recorded in Part A's
+deferred list, reproducing exactly as described. It is untouched by Part B and
+remains the highest-value item outstanding: the crash kills a run mid-phase and
+leaves that session's trace row at `status=running` forever.
+
+### What the review loop caught that the tests did not
+
+Nineteen review cycles found defects that a green suite had already accepted.
+The recurring shape was **a test arranged so the interesting branch never ran**:
+
+- `_run_tier` reported `passed=True` for zero executed commands, reachable via
+  a generated `BLOCKS = []` or a repo whose every block is `full`. A regression
+  against the code it replaced, and the exact failure this plan exists to
+  remove.
+- `path_matches` folded the path but not the pattern, so a backslash in
+  `protected_files` matched nothing and failed **open** — the builder free to
+  rewrite its own grader.
+- `walk()` filtered `rglob` output instead of pruning the descent: measured
+  4.05s against 0.018s on a 25k-file repo, times four walks an install.
+- A SvelteKit app at the repo root — the `npx sv create` default — wired two
+  gates that could never fire.
+- Three gates fired on idiomatic code: inline SVG `xmlns`, a `const
+  PUBLIC_ROUTES` array, and any helper `.cs` file inside a `Migrations/` folder.
+- `test_repo_relative_strips_an_absolute_root` passed against the `lstrip`
+  implementation it was written to reject, because `"/repo/apps/a.cs".lstrip("/repo")`
+  also yields `"apps/a.cs"`.
