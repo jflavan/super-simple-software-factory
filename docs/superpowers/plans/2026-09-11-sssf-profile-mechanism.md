@@ -2524,6 +2524,23 @@ git commit -m "feat(profiles): the dotnet framework module"
 
 ## Task 8: The `sveltekit` framework module
 
+> **Amended after review (commit `7548558`).** The code block below is the text
+> as planned; `sveltekit.py` is now the authority and differs in four ways the
+> review required. The CSP probe tries `svelte.config.js` **before** the server
+> hook, because that is where SvelteKit documents `kit.csp.directives` — the
+> hook is the manual alternative, so probing it alone missed the mainstream
+> configuration entirely. `CSP_FILES` covers `.ts`, `.js` and `.mjs` spellings
+> rather than TypeScript only. `CSP_MARKERS` is tightened to `("csp:",
+> "content-security-policy", "contentsecuritypolicy")`: a bare `"csp"` matched
+> a `cspNonce` variable or a `// TODO: csp`, wiring the gate against a file
+> holding no directives, which then demanded an edit to the wrong file for
+> every external URL. And `blocks()` reports a frontend with no `.env.example`
+> as unresolved instead of silently wiring no gate for it.
+>
+> **Any fixture written for this module must carry a real marker.** A bare
+> `// csp` comment is the exact false positive the tightened markers exist to
+> reject, so a test using it asserts the opposite of the contract.
+
 **Files:**
 - Create: `.claude/skills/sssf/templates/profiles/frameworks/sveltekit.py`
 - Test: `tests/test_framework_sveltekit.py`
@@ -2616,7 +2633,7 @@ def test_env_example_sync_is_wired_only_when_an_example_exists(tmp_path):
 
 def test_csp_is_wired_only_when_a_policy_was_detected(tmp_path):
     package(tmp_path, "apps/web", {"build": "x"})
-    write(tmp_path, "apps/web/src/hooks.server.ts", "// csp\n")
+    write(tmp_path, "apps/web/src/hooks.server.ts", "// csp: default-src 'self';\n")
     wirings = sveltekit.gate_wiring(sveltekit.detect(tmp_path))
     assert [w.name for w in wirings] == ["sveltekit_csp"]
     assert "hooks.server.ts" in wirings[0].call
@@ -2626,7 +2643,7 @@ def test_the_wired_calls_are_valid_python_expressions(tmp_path):
     import ast
     package(tmp_path, "apps/web", {"build": "x"})
     write(tmp_path, "apps/web/.env.example", "PUBLIC_X=\n")
-    write(tmp_path, "apps/web/src/hooks.server.ts", "// csp\n")
+    write(tmp_path, "apps/web/src/hooks.server.ts", "// csp: default-src 'self';\n")
     for wiring in sveltekit.gate_wiring(sveltekit.detect(tmp_path)):
         ast.parse(wiring.call, mode="eval")
 
@@ -4044,7 +4061,7 @@ def test_the_wired_gates_come_from_every_framework(tmp_path):
     repo.mkdir()
     dotnet_svelte_repo(repo)
     write(repo, "apps/web/.env.example", "PUBLIC_X=\n")
-    write(repo, "apps/web/src/hooks.server.ts", "// csp\n")
+    write(repo, "apps/web/src/hooks.server.ts", "// csp: default-src 'self';\n")
     profile = _profile(tmp_path)
 
     report = profile.generate(profile.detect(repo), repo, write=False)
