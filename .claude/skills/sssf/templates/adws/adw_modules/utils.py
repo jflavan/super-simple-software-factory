@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import os
+import re
 import secrets
 import shutil
 import subprocess
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -119,3 +121,85 @@ def engineer_name() -> str:
     except OSError:
         pass
     return os.environ.get("USER", "engineer")
+
+
+@lru_cache(maxsize=512)
+def glob_to_regex(pattern: str) -> re.Pattern:
+    """Translate a path glob, with `*` stopping at a path separator.
+
+    fnmatch would let `*` cross `/`, which quietly widens every pattern:
+    `adws/adw_*.py` would match `adws/adw_data/sessions/x/y.py` as well as the
+    ADW scripts it means. `**` is the way to say "cross directories".
+
+    `**/` matches zero or more directories, so `**/*.md` covers `README.md` at
+    the root as well as `docs/a/b.md`. Requiring at least one directory there
+    is a trap: the pattern reads as "any markdown file anywhere" and every
+    author who writes it means that.
+    """
+    out, i = [], 0
+    while i < len(pattern):
+        if pattern.startswith("**/", i):
+            out.append("(?:.*/)?")
+            i += 3
+        elif pattern.startswith("**", i):
+            out.append(".*")
+            i += 2
+        elif pattern[i] == "*":
+            out.append("[^/]*")
+            i += 1
+        elif pattern[i] == "?":
+            out.append("[^/]")
+            i += 1
+        else:
+            out.append(re.escape(pattern[i]))
+            i += 1
+    return re.compile("".join(out))
+
+
+def path_matches(path: str, pattern: str) -> bool:
+    """One path against one pattern: prefix, glob, or exact equality.
+
+    Backslashes are folded to forward slashes first. git reports forward
+    slashes on every platform, but an agent reporting `changed_files` on
+    Windows may not, and a permission check that silently stops matching on
+    one platform is the worst possible failure of a permission check.
+    """
+    path = str(path).replace("\\", "/")
+    if pattern.endswith("/"):                      # directory prefix
+        return path.startswith(pattern)
+    if "*" in pattern or "?" in pattern:
+        return glob_to_regex(pattern).fullmatch(path) is not None
+    return path == pattern
+
+
+def repo_relative(path: str, repo_root: str) -> str:
+    """An agent's reported path, reduced to the repo-relative form rules use.
+
+    Envelopes carry whatever shape the model wrote: absolute, `./`-prefixed, or
+    already relative. Every rule in this system — `writes:`, `doc_policy`, the
+    stack gates — is written repo-relative, so the normalization happens once,
+    here, rather than in each of them slightly differently.
+    """
+    text = str(path).replace("\\", "/")
+    root = str(repo_root).replace("\\", "/").rstrip("/")
+    if root and text.startswith(root + "/"):
+        return text[len(root) + 1:]
+    return text[2:] if text.startswith("./") else text
+
+
+def changed_files(envelope, run) -> list[str]:
+    """Every path an envelope claims to have changed, repo-relative."""
+    return [repo_relative(f, getattr(run, "repo_root", ""))
+            for f in getattr(envelope, "changed_files", [])]
+
+
+def read_text(path) -> str:
+    """File text, or empty when it is gone.
+
+    A gate reads files the change touched, and `changed_files` includes
+    DELETIONS — so "the file is not there" is an ordinary case, not an error.
+    """
+    try:
+        return Path(path).read_text(errors="replace")
+    except OSError:
+        return ""

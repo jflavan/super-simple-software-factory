@@ -375,9 +375,26 @@ class ObservabilityConfig(BaseModel):
     poll_ms: int = 500
 
 
+class DocPolicyRule(BaseModel):
+    """One documentation contract: touching `when` requires `require`.
+
+    Both sides are path globs (see utils.path_matches), so a rule can be as
+    broad as `apps/web/src/**` or as narrow as one file. The gate reports a
+    violation; it never edits anything, because which document a change needs
+    is a judgement the repo already made and wrote down here.
+    """
+
+    when: str                       # glob matched against changed files
+    require: list[str] = Field(default_factory=list)   # globs that must also change
+
+
 class SSSFConfig(BaseModel):
     defaults: ConfigDefaults = Field(default_factory=ConfigDefaults)
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
+    # Opt-in and empty by default. A documentation gate that fires on
+    # everything gets switched off wholesale within a week, so rules are added
+    # one at a time, deliberately, by the people they bind.
+    doc_policy: list[DocPolicyRule] = Field(default_factory=list)
     agents: list[AgentConfig] = Field(default_factory=list)
 
 

@@ -15,6 +15,7 @@ import subprocess
 from pathlib import Path
 
 from .data_types import EnvelopeBase, GateReport
+from .utils import changed_files, path_matches
 
 TAIL_CHARS = 1000        # command output kept as evidence on a failure
 
@@ -106,3 +107,30 @@ def tests_pass(command: str):
         return GateReport().check(command, ok, note)
     gate.__name__ = f"tests_pass({command})"
     return gate
+
+
+def doc_policy(envelope: EnvelopeBase, run) -> GateReport:
+    """The repo's documentation contract, as declared in sssf.config.yaml.
+
+    Config-driven on purpose: every repository's contract is different, and a
+    contract written as code is a contract only a programmer may change. This
+    gate reads YAML and compares paths — the policy itself never becomes code.
+
+    Silent when no rule triggers. A gate that records a check per rule per run
+    would bury the one violation that matters under a hundred green lines.
+    """
+    report = GateReport()
+    changed = changed_files(envelope, run)
+    for rule in getattr(run.cfg, "doc_policy", []) or []:
+        triggers = [f for f in changed if path_matches(f, rule.when)]
+        if not triggers:
+            continue
+        for required in rule.require:
+            present = any(path_matches(f, required) for f in changed)
+            report.check(
+                required,
+                present,
+                f"required by {rule.when}, and in the change" if present
+                else f"{triggers[0]} matches {rule.when}, which requires "
+                     f"{required} — not in the change")
+    return report

@@ -31,11 +31,11 @@ Two keys drive it, both in sssf.config.yaml:
 
 from __future__ import annotations
 
-import re
 import subprocess
 from pathlib import Path
 
 from .data_types import AgentConfig, SSSFConfig
+from .utils import path_matches
 
 
 class PermissionBreach(RuntimeError):
@@ -74,39 +74,6 @@ def changed_paths(before: dict[str, str], after: dict[str, str]) -> list[str]:
                    if before.get(p) != after.get(p)})
 
 
-def _glob(pattern: str) -> re.Pattern:
-    """Translate a pattern, with `*` stopping at a path separator.
-
-    fnmatch would let `*` cross `/`, which quietly widens every pattern:
-    `adws/adw_*.py` would match `adws/adw_data/sessions/x/y.py` as well as the
-    ADW scripts it means. `**` is the way to say "cross directories".
-    """
-    out, i = [], 0
-    while i < len(pattern):
-        char = pattern[i]
-        if pattern.startswith("**", i):
-            out.append(".*")
-            i += 2
-        elif char == "*":
-            out.append("[^/]*")
-            i += 1
-        elif char == "?":
-            out.append("[^/]")
-            i += 1
-        else:
-            out.append(re.escape(char))
-            i += 1
-    return re.compile("".join(out))
-
-
-def _matches(path: str, pattern: str) -> bool:
-    if pattern.endswith("/"):                      # directory prefix
-        return path.startswith(pattern)
-    if "*" in pattern or "?" in pattern:
-        return _glob(pattern).fullmatch(path) is not None
-    return path == pattern
-
-
 def always_writable(cfg: SSSFConfig) -> list[str]:
     """The session runtime, which EVERY agent must be able to write.
 
@@ -126,11 +93,11 @@ def always_writable(cfg: SSSFConfig) -> list[str]:
 
 def permitted(path: str, agent: AgentConfig, cfg: SSSFConfig) -> bool:
     """Session runtime first, then the agent's own list, then what is protected."""
-    if any(_matches(path, p) for p in always_writable(cfg)):
+    if any(path_matches(path, p) for p in always_writable(cfg)):
         return True
-    if any(_matches(path, p) for p in (agent.writes or [])):
+    if any(path_matches(path, p) for p in (agent.writes or [])):
         return True                      # naming a path is what unlocks a protected one
-    if any(_matches(path, p) for p in cfg.defaults.protected_files):
+    if any(path_matches(path, p) for p in cfg.defaults.protected_files):
         return False
     return agent.writes is None          # None = unrestricted, [] = no repo writes
 
