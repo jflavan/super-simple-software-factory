@@ -5052,6 +5052,8 @@ git commit -m "test(install): doctor re-probes and writes nothing"
 
 The test builds a third framework — a pretend `vue` — out of nothing but the public shared pieces (`probes`, `emit`, `facts`), registers it, composes it into a new profile against a fixture repo, and asserts that detection, blocks, gate wiring, and the overlay all work. It must not import `dotnet.py` or `sveltekit.py`, and it must not require an edit to any shared file. If either becomes necessary, the seams are in the wrong place and this task has done its job by saying so.
 
+**It must walk every step of ADDING A FRAMEWORK, not just the first.** A review of the framework registry found this task, as first drafted, monkeypatched `composite.get_framework`, called `verify()` directly, and set `GATE_MODULE` and `OVERLAY` to `""` — so it proved step 1 and silently skipped steps 2 through 5, which are precisely the steps a newcomer is most likely to get wrong. The task now: writes a real gate module and a real prompt fragment (steps 2 and 3), registers the framework in `FRAMEWORKS` for real rather than monkeypatching the lookup (step 4), and points `registry.PROFILES_DIR` at a directory holding a real `profile.yaml` so discovery runs (step 5).
+
 It is a *test* framework rather than a shipped Angular profile on purpose: shipping a half-tested Angular profile would be worse than shipping none, and the thing under test here is the interface, not Angular.
 
 - [ ] **Step 1: Write the third framework**
@@ -5077,8 +5079,12 @@ from profiles import emit, probes
 from profiles.facts import FrameworkFacts, Frontend, GateWiring, ProfileFacts, QualityBlock
 
 NAME = "vue"
-GATE_MODULE = ""            # this framework brings no gates
-OVERLAY = ""                # nor any prompt guidance
+# Deliberately NON-empty. An earlier draft set both to "" so this framework
+# brought no gate module and no prompt fragment - which meant the acceptance
+# test exercised step 1 of ADDING A FRAMEWORK and skipped steps 2 and 3, the
+# two it most needed to prove. The files these name are created by the test.
+GATE_MODULE = "gates_vue"
+OVERLAY = "vue.md"
 
 MARKER = "vue"
 
@@ -5109,7 +5115,16 @@ def describe(facts: VueFacts) -> list[str]:
 
 
 def gate_wiring(facts: VueFacts) -> list[GateWiring]:
-    return []
+    """One gate per frontend found, so the wiring path is actually exercised.
+
+    A framework that wires nothing would let render_gates_module go untested by
+    this task, which is the one task whose job is to prove a new framework
+    reaches every part of the machinery.
+    """
+    if not facts.frontends:
+        return []
+    return [GateWiring(module=GATE_MODULE, name="vue_smoke",
+                       call=f"vue_smoke({[f.directory for f in facts.frontends]!r})")]
 ```
 
 - [ ] **Step 2: Write the failing test**
