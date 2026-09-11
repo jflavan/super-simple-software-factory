@@ -1833,13 +1833,19 @@ def test_colliding_package_names_produce_unique_block_names():
     assert sorted(names) == ["build-apps-web", "build-packages-web"]
 
 
-def test_colliding_packages_do_not_share_one_recipe(tmp_path):
-    """Unique names are not enough if both run the SAME command.
+def test_colliding_packages_do_not_share_one_recipe():
+    """Unique names are not enough if both run the SAME check.
 
-    With a runner declaring `build-web`, a naive per-package label would
-    resolve it twice: two differently-named blocks, one identical argv, one
-    package actually checked. The duplicate-name guard cannot see it because
-    the names differ.
+    With a runner declaring `build-web`, a naive per-package label resolves it
+    twice: two differently-named blocks, one identical command, one package
+    actually checked. The duplicate-name guard cannot see it, because the names
+    differ.
+
+    Correct behaviour is to decline the ambiguous recipe - neither
+    `build-apps-web` nor `build-packages-web` is declared - and fall through to
+    per-package commands. Those argvs are then IDENTICAL, which is exactly what
+    `cwd` exists for, so the pair is what has to be distinct rather than the
+    argv alone.
     """
     repo = _repo(task_runner="just", recipes=["build-web"])
     frontends = [Frontend(directory="apps/web", scripts=["build"]),
@@ -1847,8 +1853,10 @@ def test_colliding_packages_do_not_share_one_recipe(tmp_path):
 
     blocks, _ = emit.script_blocks(frontends, repo, SCRIPTS)
 
-    assert len({tuple(b.argv) for b in blocks}) == 2
+    assert len({(tuple(b.argv), b.cwd) for b in blocks}) == 2
     assert {b.cwd for b in blocks} == {"apps/web", "packages/web"}
+    # The point of the test: the ambiguous recipe is borrowed by neither.
+    assert all("build-web" not in block.argv for block in blocks)
 
 
 # ── rendering ────────────────────────────────────────────────────────────────
@@ -2103,7 +2111,7 @@ def write_file(root, relative: str, text: str, written: list[str]) -> None:
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/test_emit.py -v`
-Expected: PASS — 16 passed.
+Expected: PASS — 17 passed.
 
 - [ ] **Step 5: Commit**
 
