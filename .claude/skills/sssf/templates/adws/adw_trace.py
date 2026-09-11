@@ -28,7 +28,11 @@ DEFAULT_DB = "adws/adw_data/sssf.db"
 
 
 def _rows(db: str, sql: str, params: tuple = ()) -> list[sqlite3.Row]:
-    connection = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    # as_uri() rather than an f-string: a filesystem path is not a URI, and a
+    # `#` in it starts a fragment — which silently opens a DIFFERENT, empty
+    # database and surfaces later as "no such table" rather than as an error.
+    uri = Path(db).resolve().as_uri() + "?mode=ro"
+    connection = sqlite3.connect(uri, uri=True)
     connection.row_factory = sqlite3.Row
     try:
         return connection.execute(sql, params).fetchall()
@@ -36,18 +40,33 @@ def _rows(db: str, sql: str, params: tuple = ()) -> list[sqlite3.Row]:
         connection.close()
 
 
+CELL_CHARS = 160        # a scanning view; the full value is in the db and the artifacts
+
+
+def _cell(value) -> str:
+    """One row value, flattened to a single line so the table stays a table.
+
+    A phase's `error` is routinely a traceback and `violations_json` is JSON —
+    both carry newlines, and ljust() pads by character count while print emits
+    the real break, so one multiline value corrupts the alignment of its row
+    and every row after it.
+    """
+    if value is None:
+        return ""
+    text = " ".join(str(value).split())
+    return text if len(text) <= CELL_CHARS else text[:CELL_CHARS - 1] + "…"
+
+
 def _print(rows: list[sqlite3.Row]) -> None:
     if not rows:
         print("(no rows)")
         return
     columns = rows[0].keys()
-    widths = [max(len(c), max(len(str(r[c] if r[c] is not None else "")) for r in rows))
-              for c in columns]
+    widths = [max(len(c), max(len(_cell(r[c])) for r in rows)) for c in columns]
     print("  ".join(c.ljust(w) for c, w in zip(columns, widths)))
     print("  ".join("-" * w for w in widths))
     for row in rows:
-        print("  ".join(str(row[c] if row[c] is not None else "").ljust(w)
-                        for c, w in zip(columns, widths)))
+        print("  ".join(_cell(row[c]).ljust(w) for c, w in zip(columns, widths)))
 
 
 def main(argv: list[str] | None = None) -> int:

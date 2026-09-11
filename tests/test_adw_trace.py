@@ -72,3 +72,41 @@ def test_a_missing_database_is_reported_not_crashed(tmp_path, capsys):
 
     assert code == 1
     assert "no trace database" in capsys.readouterr().out
+
+
+def test_a_multiline_error_does_not_break_the_table(tmp_path, capsys):
+    """A traceback in `error` is the normal content of a failed phase."""
+    path = tmp_path / "sssf.db"
+    conn = sqlite3.connect(path)
+    conn.executescript(SCHEMA)
+    conn.execute(
+        "INSERT INTO phases (phase_id, adw_id, seq, name, kind, owner, "
+        "description, status, error) VALUES (?,?,?,?,?,?,?,?,?)",
+        ("p1", "a1", 1, "build", "agent", "builder", "Implement it", "fail",
+         "Traceback (most recent call last):\n  File x\n    boom\nValueError: bad"))
+    conn.commit()
+    conn.close()
+
+    adw_trace.main(["phases", "a1", "--db", str(path)])
+
+    out = capsys.readouterr().out
+    body = [line for line in out.splitlines() if line.strip()]
+    # header + dashes + exactly one data row — a raw newline would make more.
+    assert len(body) == 3, f"the table gained rows from an embedded newline: {body}"
+    assert "ValueError: bad" in out
+
+
+def test_a_path_containing_a_hash_is_read_correctly(tmp_path, capsys):
+    """A filesystem path is not a URI: `#` would start a fragment."""
+    awkward = tmp_path / "trace#1"
+    awkward.mkdir()
+    path = awkward / "sssf.db"
+    conn = sqlite3.connect(path)
+    conn.executescript(SCHEMA)
+    conn.execute(
+        "INSERT INTO sessions (adw_id, status) VALUES (?,?)", ("hashy", "success"))
+    conn.commit()
+    conn.close()
+
+    assert adw_trace.main(["sessions", "--db", str(path)]) == 0
+    assert "hashy" in capsys.readouterr().out
