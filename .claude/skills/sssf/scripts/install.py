@@ -9,7 +9,7 @@ Usage:
     uv run <skill>/scripts/install.py --doctor
 
 Stamps: adws/ (modules + starter ADWs), adws/adw_data/prompt_engineering/
-(4 starter agents), adws/adw_sssf_config/sssf.config.yaml, .env.sample,
+(5 starter agents), adws/adw_sssf_config/sssf.config.yaml, .env.sample,
 .gitignore entries. Existing files are skipped unless --force.
 
 Then applies a stack PROFILE: probes the repo, stamps the gate module of every
