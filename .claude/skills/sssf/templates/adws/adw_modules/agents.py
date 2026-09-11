@@ -15,10 +15,10 @@ from typing import Optional
 
 import yaml
 
-from . import agent_pi, permissions, prompts
-from .data_types import (AgentCall, AgentConfig, AgentRequest, EnvelopeBase,
-                         EventRecord, GateCheck, GateReport, Phase, SSSFConfig,
-                         UsageBreakdown)
+from . import agent_cc, agent_pi, permissions, prompts
+from .data_types import (AgentCall, AgentConfig, AgentRequest, AgentResult,
+                         EnvelopeBase, EventRecord, GateCheck, GateReport, Phase,
+                         SSSFConfig, UsageBreakdown)
 from .utils import new_id
 
 JSON_FIX_ATTEMPTS = 2      # continue-with-correction attempts for malformed JSON
@@ -26,6 +26,21 @@ JSON_FIX_ATTEMPTS = 2      # continue-with-correction attempts for malformed JSO
 
 class GateFailure(RuntimeError):
     pass
+
+
+BACKENDS = {"pi": agent_pi, "claude_code": agent_cc}
+
+
+def backend_for(agent: AgentConfig):
+    """The module that runs this agent. Both expose run/resolve_model/
+    context_window/validate_agent/ToolCallTracker, so callers never branch on
+    the name."""
+    backend = BACKENDS.get(agent.coding_agent)
+    if backend is None:
+        raise SystemExit(f"agent {agent.name!r}: unknown coding_agent "
+                         f"{agent.coding_agent!r} — expected one of "
+                         f"{', '.join(sorted(BACKENDS))}")
+    return backend
 
 
 # ── config ───────────────────────────────────────────────────────────────────
@@ -58,15 +73,18 @@ def validate(cfg: SSSFConfig, required: list[str]) -> None:
         except SystemExit as e:
             problems.append(str(e))
             continue
-        if agent.coding_agent != "pi":
-            problems.append(f"agent {name!r}: coding_agent {agent.coding_agent!r} "
-                            f"is not implemented in v1 (pi only)")
         for label, ref in (("system", agent.prompt_engineering.system),
                            ("user", agent.prompt_engineering.user)):
             if not Path(ref).is_file():
                 problems.append(f"agent {name!r}: {label} prompt not found: {ref}")
         try:
-            agent_pi.resolve_model(agent.model)
+            backend = backend_for(agent)
+        except SystemExit as e:
+            problems.append(str(e))
+            continue
+        problems.extend(backend.validate_agent(agent))
+        try:
+            backend.resolve_model(agent.model)
         except ValueError as e:
             problems.append(f"agent {name!r}: {e}")
     if problems:
@@ -106,10 +124,10 @@ def execute(run, phase: Phase, call: AgentCall) -> EnvelopeBase:
     # Parse retries and gate corrections re-enter the SAME pi session, so the
     # last send is the one whose context occupancy is current — while spend is
     # the opposite: every send costs, so usage accumulates across all of them.
-    latest: agent_pi.AgentResult | None = None
+    latest: AgentResult | None = None
     spent = UsageBreakdown()
 
-    def send(prompt_text: str) -> agent_pi.AgentResult:
+    def send(prompt_text: str) -> AgentResult:
         nonlocal latest
         request = AgentRequest(
             prompt=prompt_text,
@@ -118,15 +136,15 @@ def execute(run, phase: Phase, call: AgentCall) -> EnvelopeBase:
             thinking=agent.thinking,
             session_id=session_id,
             # absolute: these are read by the pi subprocess, which runs in repo_root
-            session_dir=str((agent_dir / "pi_sessions").resolve()),
+            session_dir=str((agent_dir / "sessions").resolve()),
             raw_output_path=str((agent_dir / "raw_output.jsonl").resolve()),
             tools=agent.tools,
             extensions=agent.harness_engineering,
             cwd=str(run.repo_root),
         )
-        result = agent_pi.run(
+        result = backend_for(agent).run(
             request,
-            on_event=_event_forwarder(run, phase, agent.name),
+            on_event=_event_forwarder(run, phase, agent.name, backend_for(agent)),
             on_spawn=lambda pid: run.tracer.process_start(
                 run.adw_id, "agent", agent.name, pid,
                 f"{agent.coding_agent} {agent.name} {agent.model}"),
@@ -232,12 +250,25 @@ def _agent_session_id(run, agent: AgentConfig) -> str:
     return f"sssf-{run.adw_id}-{agent.name}-{new_id(4)}"
 
 
-def _event_forwarder(run, phase: Phase, agent_name: str):
+def _event_forwarder(run, phase: Phase, agent_name: str, backend):
     """One tool_call event per real tool call, with its exact args and result."""
-    tracker = agent_pi.ToolCallTracker()
+    tracker = backend.ToolCallTracker()
 
     def forward(event: dict) -> None:
-        for record in tracker.observe(event):
+        try:
+            records = tracker.observe(event)
+        except Exception as error:                  # noqa: BLE001
+            # A tracker parses a subprocess's stdout. Malformed JSON is the
+            # subprocess's problem, not a reason to abort work that is otherwise
+            # going fine — so the failure is recorded and the run continues.
+            # This callback runs inside the backend's stream loop, where an
+            # exception would otherwise terminate the whole agent call.
+            run.tracer.event(EventRecord(adw_id=run.adw_id, phase_id=phase.phase_id,
+                                         type="log", name="tool_trace_failed",
+                                         payload={"agent": agent_name,
+                                                  "error": str(error)[:500]}))
+            return
+        for record in records:
             # The call's span rides the columns; duration_ms stays in the
             # payload as the backend's own authoritative number.
             run.tracer.event(EventRecord(adw_id=run.adw_id, phase_id=phase.phase_id,

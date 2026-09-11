@@ -90,6 +90,12 @@ def resolve_model(pattern: str) -> tuple[str, str]:
     raise ValueError(f"model pattern {pattern!r} is ambiguous: {matches}")
 
 
+def validate_agent(agent) -> list[str]:
+    """Config problems this backend can detect. pi accepts everything the
+    schema allows; the model check lives in resolve_model."""
+    return []
+
+
 def _context_tokens(usage: dict) -> int:
     """Tokens occupying the window after a turn.
 
