@@ -20,10 +20,51 @@ from .utils import claimed_files, read_text
 # documentation, not a dependency on it.
 SOURCE_SUFFIXES = {".ts", ".js", ".mjs", ".cjs", ".svelte", ".tsx", ".jsx"}
 
-ORIGIN = re.compile(r"https?://[A-Za-z0-9.\-]+(?::\d+)?")
+# An origin only matters if something REQUESTS it. Matching every URL in the
+# text flagged `xmlns="http://www.w3.org/2000/svg"` - which every standalone
+# inline SVG carries - plus documentation links in `//` comments and licence
+# URLs (`@license ... https://opensource.org/licenses/MIT`). None of those is
+# a subresource the browser fetches, so none belongs in a CSP, and a gate
+# demanding they be added is one an operator cannot satisfy.
+#
+# `href=` is deliberately NOT included: an `<a href>` is a navigation, not a
+# CSP-governed subresource, and doc links in markup are common.
+_HOST = r"https?://[A-Za-z0-9.\-]+(?::\d+)?"
+REQUESTED_ORIGIN = re.compile(
+    rf"""(?:fetch|WebSocket|EventSource|importScripts|sendBeacon)\s*\(\s*["'`]({_HOST})"""
+    rf"""|\bsrc\s*=\s*["'`]({_HOST})""")
 
 # A development host is not an origin a production policy has to allow.
 LOCAL_HOSTS = ("localhost", "127.0.0.1", "0.0.0.0", "[::1]")
+
+# Only the two shapes that ARE env references. A bare PUBLIC_* identifier is
+# not one: `const PUBLIC_ROUTES = [...]` in an auth guard is idiomatic, and a
+# gate demanding it be added to .env.example is a gate that gets deleted.
+PUBLIC_IMPORT = re.compile(
+    r"""import\s*\{([^}]*)\}\s*from\s*["']\$env/(?:static|dynamic)/public["']""")
+VITE_ENV = re.compile(r"import\.meta\.env\.([A-Za-z][A-Za-z0-9_]*)")
+
+
+def _referenced_env_names(text: str, prefixes: tuple[str, ...]) -> set[str]:
+    """Every env variable name this source genuinely reads.
+
+    A `$env/.../public` import binds by name - `X` or `X as Y`, where `X` is
+    the variable actually being read, not the local alias `Y`.
+    `import.meta.env.X` names it directly. Anything else - a bare identifier
+    in a comment, a string, an enum member, markup text - is not a reference
+    to the environment at all.
+    """
+    names: set[str] = set()
+    for group in PUBLIC_IMPORT.findall(text):
+        for item in group.split(","):
+            name = item.strip().split(" as ")[0].strip()
+            if name:
+                names.add(name)
+    names |= set(VITE_ENV.findall(text))
+    # SvelteKit's public import can only legally carry PUBLIC_*, and
+    # `import.meta.env` also exposes MODE/DEV/PROD - not the operator's to
+    # declare in an example file.
+    return {n for n in names if n.startswith(prefixes)}
 
 
 def _sources(changed: list[str], directory: str, exclude: str = "") -> list[str]:
@@ -53,9 +94,14 @@ def env_example_sync(pairs: list[tuple[str, str]], prefixes: list[str]):
     added ones. Deriving "newly added" needs a diff and gives a weaker answer:
     a variable that was missing from the example three commits ago is just as
     broken for the next person who clones.
+
+    "References" means an actual `$env/.../public` import or an
+    `import.meta.env.X` read - not a bare `PUBLIC_*`/`VITE_*` identifier
+    appearing anywhere in the text. A bare identifier also matches a route
+    table entry, a removed-variable comment, a test fixture, an enum member,
+    or markup text, none of which is a dependency on an environment variable.
     """
-    pattern = re.compile(r"\b(?:" + "|".join(re.escape(p) for p in prefixes)
-                         + r")[A-Z0-9_]+\b")
+    prefix_tuple = tuple(prefixes)
 
     def gate(envelope: EnvelopeBase, run) -> GateReport:
         report = GateReport()
@@ -65,9 +111,10 @@ def env_example_sync(pairs: list[tuple[str, str]], prefixes: list[str]):
             if not sources:
                 continue
             declared = read_text(Path(run.repo_root) / example)
-            referenced = set()
+            referenced: set[str] = set()
             for source in sources:
-                referenced |= set(pattern.findall(read_text(Path(run.repo_root) / source)))
+                text = read_text(Path(run.repo_root) / source)
+                referenced |= _referenced_env_names(text, prefix_tuple)
             for name in sorted(referenced):
                 present = name in declared
                 report.check(f"{name} in {example}", present,
@@ -90,6 +137,10 @@ def sveltekit_csp(pairs: list[tuple[str, str]]):
 
     The failure it prevents is browser-side and silent: the request is blocked,
     nothing throws on the server, and the feature simply does not work.
+
+    An origin is only collected when it appears in a request-shaped context
+    (`fetch(...)`, `new WebSocket(...)`, an element's `src=`, and similarly)
+    rather than anywhere in the text - see REQUESTED_ORIGIN above.
     """
     def gate(envelope: EnvelopeBase, run) -> GateReport:
         report = GateReport()
@@ -99,9 +150,11 @@ def sveltekit_csp(pairs: list[tuple[str, str]]):
             if not sources:
                 continue
             policy = read_text(Path(run.repo_root) / policy_file)
-            origins = set()
+            origins: set[str] = set()
             for source in sources:
-                origins |= set(ORIGIN.findall(read_text(Path(run.repo_root) / source)))
+                text = read_text(Path(run.repo_root) / source)
+                origins |= {match for groups in REQUESTED_ORIGIN.findall(text)
+                            for match in groups if match}
             unknown = sorted(o for o in origins
                              if not any(host in o for host in LOCAL_HOSTS)
                              and o not in policy)

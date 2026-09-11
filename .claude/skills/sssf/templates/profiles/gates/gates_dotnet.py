@@ -10,6 +10,7 @@ in none that does not.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from .data_types import EnvelopeBase, GateReport
@@ -19,6 +20,16 @@ from .utils import claimed_files
 MIGRATIONS_DIR = "Migrations"
 DESIGNER_SUFFIX = ".Designer.cs"
 SNAPSHOT_SUFFIX = "ModelSnapshot.cs"
+
+# EF Core names every migration `<14-digit timestamp>_<Name>.cs` and puts it
+# DIRECTLY in the Migrations folder. Both halves matter: without the timestamp
+# this fires on MigrationExtensions.cs and DesignTimeDbContextFactory.cs, and
+# without the depth check it fires on Migrations/Seed/SeedData.cs and on any
+# path with `Migrations` as a middle segment. A FluentMigrator repo, whose
+# convention is also a Migrations/ folder, has no Designer file and no
+# snapshot ever - so being silent when we cannot tell it is EF Core is the
+# only honest behaviour.
+EF_MIGRATION_NAME = re.compile(r"^\d{8,}_")
 
 
 def ef_migration_triad(envelope: EnvelopeBase, run) -> GateReport:
@@ -40,7 +51,8 @@ def ef_migration_triad(envelope: EnvelopeBase, run) -> GateReport:
     for path in changed:
         parts = path.split("/")
         name = parts[-1]
-        if MIGRATIONS_DIR not in parts[:-1] or not name.endswith(".cs"):
+        if (len(parts) < 2 or parts[-2] != MIGRATIONS_DIR or not name.endswith(".cs")
+                or not EF_MIGRATION_NAME.match(name)):
             continue
         if name.endswith(DESIGNER_SUFFIX) or name.endswith(SNAPSHOT_SUFFIX):
             continue

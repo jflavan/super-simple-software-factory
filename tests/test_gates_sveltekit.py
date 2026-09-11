@@ -72,10 +72,79 @@ def test_a_private_variable_is_not_this_gate_s_business(tmp_path):
     assert gate(_envelope([source]), _run(tmp_path)).passed
 
 
+# ── Fix 2: a bare PUBLIC_*/VITE_* identifier is not an env reference ─────────
+
+def test_a_bare_const_named_public_is_not_flagged(tmp_path):
+    """`const PUBLIC_ROUTES = [...]` in an auth guard is idiomatic SvelteKit."""
+    source = _source(tmp_path, "apps/web/src/lib/routes.ts",
+                     "const PUBLIC_ROUTES = ['/login', '/register'];\n")
+    _source(tmp_path, "apps/web/.env.example", "")
+    gate = env_example_sync([("apps/web", "apps/web/.env.example")], PREFIXES)
+    assert gate(_envelope([source]), _run(tmp_path)).checks == []
+
+
+def test_a_comment_mentioning_a_removed_variable_is_not_flagged(tmp_path):
+    source = _source(tmp_path, "apps/web/src/lib/notes.ts",
+                     "// PUBLIC_LEGACY_URL was removed in v2\n")
+    _source(tmp_path, "apps/web/.env.example", "")
+    gate = env_example_sync([("apps/web", "apps/web/.env.example")], PREFIXES)
+    assert gate(_envelope([source]), _run(tmp_path)).checks == []
+
+
+def test_a_string_literal_matching_the_pattern_is_not_flagged(tmp_path):
+    source = _source(tmp_path, "apps/web/src/lib/label.test.ts",
+                     "expect(label).toBe('PUBLIC_BETA');\n")
+    _source(tmp_path, "apps/web/.env.example", "")
+    gate = env_example_sync([("apps/web", "apps/web/.env.example")], PREFIXES)
+    assert gate(_envelope([source]), _run(tmp_path)).checks == []
+
+
+def test_an_enum_member_is_not_flagged(tmp_path):
+    source = _source(tmp_path, "apps/web/src/lib/visibility.ts",
+                     "export enum Visibility { PUBLIC_READ, PRIVATE_READ }\n")
+    _source(tmp_path, "apps/web/.env.example", "")
+    gate = env_example_sync([("apps/web", "apps/web/.env.example")], PREFIXES)
+    assert gate(_envelope([source]), _run(tmp_path)).checks == []
+
+
+def test_markup_text_matching_the_pattern_is_not_flagged(tmp_path):
+    source = _source(tmp_path, "apps/web/src/routes/+page.svelte",
+                     "<div>PUBLIC_NOTICE</div>\n")
+    _source(tmp_path, "apps/web/.env.example", "")
+    gate = env_example_sync([("apps/web", "apps/web/.env.example")], PREFIXES)
+    assert gate(_envelope([source]), _run(tmp_path)).checks == []
+
+
+def test_a_real_static_public_import_still_fires(tmp_path):
+    source = _source(tmp_path, "apps/web/src/lib/api.ts",
+                     "import { PUBLIC_API_URL } from '$env/static/public';\n")
+    _source(tmp_path, "apps/web/.env.example", "")
+    gate = env_example_sync([("apps/web", "apps/web/.env.example")], PREFIXES)
+    assert "PUBLIC_API_URL" in gate(_envelope([source]), _run(tmp_path)).violations[0]
+
+
+def test_a_real_import_meta_env_reference_still_fires(tmp_path):
+    source = _source(tmp_path, "apps/web/src/lib/map.ts",
+                     "const key = import.meta.env.VITE_MAP_KEY;\n")
+    _source(tmp_path, "apps/web/.env.example", "")
+    gate = env_example_sync([("apps/web", "apps/web/.env.example")], PREFIXES)
+    assert "VITE_MAP_KEY" in gate(_envelope([source]), _run(tmp_path)).violations[0]
+
+
+def test_an_aliased_import_is_checked_under_its_real_name(tmp_path):
+    """`X as Y`: the variable actually being read is X, the left side."""
+    source = _source(tmp_path, "apps/web/src/lib/api.ts",
+                     "import { PUBLIC_API_URL as apiUrl } from '$env/static/public';\n")
+    _source(tmp_path, "apps/web/.env.example", "")
+    gate = env_example_sync([("apps/web", "apps/web/.env.example")], PREFIXES)
+    assert "PUBLIC_API_URL" in gate(_envelope([source]), _run(tmp_path)).violations[0]
+
+
 def test_each_frontend_is_checked_against_its_own_example(tmp_path):
     _source(tmp_path, "apps/web/.env.example", "")
     _source(tmp_path, "apps/admin/.env.example", "")
-    source = _source(tmp_path, "apps/admin/src/x.ts", "const u = PUBLIC_ADMIN_URL;\n")
+    source = _source(tmp_path, "apps/admin/src/x.ts",
+                     "import { PUBLIC_ADMIN_URL } from '$env/static/public';\n")
 
     gate = env_example_sync([("apps/web", "apps/web/.env.example"),
                              ("apps/admin", "apps/admin/.env.example")], PREFIXES)
@@ -101,7 +170,8 @@ def test_a_deleted_source_file_does_not_crash_the_gate(tmp_path):
 
 
 def test_a_missing_example_file_is_reported_not_raised(tmp_path):
-    source = _source(tmp_path, "apps/web/src/a.ts", "const u = PUBLIC_API_URL;\n")
+    source = _source(tmp_path, "apps/web/src/a.ts",
+                     "import { PUBLIC_API_URL } from '$env/static/public';\n")
     gate = env_example_sync([("apps/web", "apps/web/.env.example")], PREFIXES)
     assert not gate(_envelope([source]), _run(tmp_path)).passed
 
@@ -170,6 +240,52 @@ def test_localhost_is_not_an_external_origin(tmp_path):
                      "fetch('http://127.0.0.1:8080/y');\n")
     gate = sveltekit_csp([("apps/web", HOOKS)])
     assert gate(_envelope([source]), _run(tmp_path)).checks == []
+
+
+# ── Fix 1: an origin only matters if something REQUESTS it ─────────────────
+
+def test_an_inline_svgs_xmlns_is_not_flagged(tmp_path):
+    """Every standalone inline SVG carries this - it is not a subresource."""
+    _source(tmp_path, HOOKS, "const csp = \"default-src 'self'\";\n")
+    source = _source(tmp_path, "apps/web/src/lib/Icon.svelte",
+                     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">'
+                     '<path d="M1 1" /></svg>\n')
+    gate = sveltekit_csp([("apps/web", HOOKS)])
+    assert gate(_envelope([source]), _run(tmp_path)).checks == []
+
+
+def test_a_comment_link_is_not_flagged(tmp_path):
+    _source(tmp_path, HOOKS, "const csp = \"default-src 'self'\";\n")
+    source = _source(tmp_path, "apps/web/src/lib/notes.ts",
+                     "// see https://kit.svelte.dev/docs/configuration\n")
+    gate = sveltekit_csp([("apps/web", HOOKS)])
+    assert gate(_envelope([source]), _run(tmp_path)).checks == []
+
+
+def test_a_licence_url_is_not_flagged(tmp_path):
+    _source(tmp_path, HOOKS, "const csp = \"default-src 'self'\";\n")
+    source = _source(tmp_path, "apps/web/src/lib/vendor.ts",
+                     "// @license ... https://opensource.org/licenses/MIT\n")
+    gate = sveltekit_csp([("apps/web", HOOKS)])
+    assert gate(_envelope([source]), _run(tmp_path)).checks == []
+
+
+def test_a_json_ld_schema_url_is_not_flagged(tmp_path):
+    _source(tmp_path, HOOKS, "const csp = \"default-src 'self'\";\n")
+    source = _source(tmp_path, "apps/web/src/lib/seo.ts",
+                     'const type = "https://schema.org/Person";\n')
+    gate = sveltekit_csp([("apps/web", HOOKS)])
+    assert gate(_envelope([source]), _run(tmp_path)).checks == []
+
+
+def test_a_fetch_call_still_fires_despite_the_narrower_pattern(tmp_path):
+    _source(tmp_path, HOOKS, "const csp = \"default-src 'self'\";\n")
+    source = _source(tmp_path, "apps/web/src/lib/maps.ts",
+                     "fetch('https://tiles.example.com/a.png');\n")
+    gate = sveltekit_csp([("apps/web", HOOKS)])
+    report = gate(_envelope([source]), _run(tmp_path))
+    assert not report.passed
+    assert "tiles.example.com" in report.violations[0]
 
 
 def test_the_hooks_file_itself_is_not_scanned_for_origins(tmp_path):

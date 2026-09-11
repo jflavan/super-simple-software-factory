@@ -97,3 +97,33 @@ def test_windows_separators_in_changed_files_are_handled(tmp_path):
     _touch(tmp_path, MIGRATION, DESIGNER, SNAPSHOT)
     windows = [p.replace("/", "\\") for p in (MIGRATION, DESIGNER, SNAPSHOT)]
     assert ef_migration_triad(_envelope(windows), _run(tmp_path)).passed
+
+
+# ── Fix 3: a .cs file directly in Migrations/ is not necessarily a migration ─
+
+def test_a_helper_file_beside_migrations_is_not_treated_as_one(tmp_path):
+    """No timestamp prefix - EF Core never names a migration like this."""
+    other = "apps/api/Api/Migrations/MigrationExtensions.cs"
+    _touch(tmp_path, other)
+    assert ef_migration_triad(_envelope([other]), _run(tmp_path)).checks == []
+
+
+def test_a_design_time_factory_is_not_treated_as_a_migration(tmp_path):
+    other = "apps/api/Api/Migrations/DesignTimeDbContextFactory.cs"
+    _touch(tmp_path, other)
+    assert ef_migration_triad(_envelope([other]), _run(tmp_path)).checks == []
+
+
+def test_a_file_in_a_subfolder_of_migrations_is_not_treated_as_one(tmp_path):
+    """Not directly in Migrations/ - a seed-data helper, not a migration."""
+    seed = "apps/api/Api/Migrations/Seed/SeedData.cs"
+    snapshot = "apps/api/Api/Migrations/Seed/SeedDataSnapshot.cs"
+    _touch(tmp_path, seed, snapshot)
+    assert ef_migration_triad(_envelope([seed, snapshot]), _run(tmp_path)).checks == []
+
+
+def test_migrations_as_a_non_terminal_path_segment_is_not_a_migrations_folder(tmp_path):
+    """`Migrations` here names something else on the path, not the EF folder."""
+    other = "src/Migrations/Api/Program.cs"
+    _touch(tmp_path, other)
+    assert ef_migration_triad(_envelope([other]), _run(tmp_path)).checks == []
