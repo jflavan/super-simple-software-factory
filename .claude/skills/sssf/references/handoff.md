@@ -75,7 +75,7 @@ The user prompt asks for the shape; the type enforces it. They always travel as 
 
 **Parse failure is not a restart.** If the response doesn't parse or doesn't validate, the harness re-prompts the **same session** with a correction naming the required fields — bounded by `JSON_FIX_ATTEMPTS` in `agents.py` (2). Gate violations use the identical mechanism, bounded instead by the phase's `retries`. A cold restart would throw away the context that produced the near-miss.
 
-In v1 there is no separate continue call to make: `agent_pi.run()` passes `--session-id`, which pi treats as create-or-continue, so running an agent and continuing it are the same call with the same id. Before parsing, the harness also tolerates a fenced `json` code block or prose wrapped around the object — but the prompt still asks for bare JSON, and every failed attempt is persisted as an invalid envelope row.
+There is no separate continue call for `agents.py` to make, on either backend: `ph.call()` always sends one `AgentRequest` and lets the backend decide create vs. continue. The two backends decide it differently. `agent_pi.run()` passes `--session-id`, which pi itself treats as create-or-continue, so the same flag does both. `agent_cc.run()` has no such single flag — Claude Code needs a UUID to create a session and `--resume` to continue one — so `agent_cc.py` keeps its own map (`cc_sessions.json`, alongside pi's session state) and picks the right invocation from it. Either way the caller sees one uniform `run()` call; only the module underneath knows which flavor happened. Before parsing, the harness also tolerates a fenced `json` code block or prose wrapped around the object — but the prompt still asks for bare JSON, and every failed attempt is persisted as an invalid envelope row.
 
 ## Injecting the previous envelope
 
@@ -136,10 +136,16 @@ adws/adw_data/sessions/{adw_id}/
 ├── context_handoff/        the ONE place agents write files for the agents that follow
 └── {agent_name}/
     ├── prompts/            exact prompts sent (system.md + user.md), saved before execution
-    ├── pi_sessions/        pi's own session state for this agent
+    ├── sessions/           the coding agent's own session state for this agent —
+    │                       pi's session store, or cc_sessions.json for Claude Code
     ├── raw_output.jsonl    full JSONL stream from the coding agent, appended live
     └── envelope.json       the final valid-JSON response — captured, validated, persisted by code
 ```
+
+**Renamed from `pi_sessions/`.** This directory used to be pi-specific by name; it now
+holds either backend's session state, so it was renamed to `sessions/` when Claude Code
+landed. See `cookbooks/install.md` — "Upgrading an existing installation" — for why that
+rename is a migration hazard for pi agents with runs from before it.
 
 `session.ensure(cfg, adw_id)` mints or joins the id and creates these dirs. One `context_handoff/` per session, shared by every agent — the single location for cross-agent files.
 

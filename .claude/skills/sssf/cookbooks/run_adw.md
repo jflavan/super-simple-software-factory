@@ -72,28 +72,22 @@ The trace db is `adws/adw_data/sssf.db`. It is WAL, so reads never block the run
 
 ```bash
 # where the run stands
-sqlite3 adws/adw_data/sssf.db \
-  "select seq, name, kind, owner, status, attempt from phases where adw_id='a1b2c3d4' order by seq;"
+uv run adws/adw_trace.py phases a1b2c3d4
 
-# the live tail — cursor on rowid, same query the visualizer polls
-sqlite3 adws/adw_data/sssf.db \
-  "select rowid, type, name, started_at from events where adw_id='a1b2c3d4' and rowid > 0 order by rowid limit 50;"
+# the event list — same rows the visualizer's cursor poll reads, in order
+uv run adws/adw_trace.py events a1b2c3d4
 
 # why a phase failed
-sqlite3 adws/adw_data/sssf.db \
-  "select attempt, gate, passed, checks_json from gate_results where adw_id='a1b2c3d4';"
+uv run adws/adw_trace.py gates a1b2c3d4
 
 # session-level status
-sqlite3 adws/adw_data/sssf.db \
-  "select adw_id, request, status, total_tokens from sessions order by started_at desc limit 5;"
+uv run adws/adw_trace.py sessions --limit 5
 
-# what an agent actually did, slowest tool calls first
-sqlite3 adws/adw_data/sssf.db \
-  "select name, tokens, started_at, ended_at from events
-   where adw_id='a1b2c3d4' and type='tool_call' order by ended_at desc limit 20;"
+# what an agent actually did — filter the event list to tool calls
+uv run adws/adw_trace.py events a1b2c3d4 --type tool_call
 ```
 
-Poll on a cursor: keep the highest `rowid` you have seen and query `where rowid > ?`. Don't re-read the whole table each pass.
+`adw_trace.py` has no cursor or ordering flags — `events` always prints the full list, oldest first, and `sessions --limit N` is the only paging it does. For a live cursor poll on `rowid` the way the visualizer does it, query `sssf.db` directly with the stdlib `sqlite3` module (see `references/observability.md`) rather than shelling out to a CLI that may not be installed.
 
 `tool_call` rows carry a real span, so durations come off the columns — see `references/observability.md` for which fields each event type populates.
 

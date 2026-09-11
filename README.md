@@ -58,7 +58,7 @@ Copy `.claude/skills/sssf/` into the target repo and type `/sssf install` inside
 
 ### Manual Install
 
-**Prereqs:** [`uv`](https://docs.astral.sh/uv/), [`pi`](https://github.com/mariozechner/pi-coding-agent), `sqlite3`, and an API key for whichever providers your roster names (see below). [`bun`](https://bun.sh) only if you want the visualizer.
+**Prereqs:** [`uv`](https://docs.astral.sh/uv/), the coding agent(s) your roster names — [`pi`](https://github.com/mariozechner/pi-coding-agent) and/or [Claude Code](https://github.com/anthropics/claude-code) — and an API key for whichever providers your roster names (see below). The trace reads the db with the stdlib `sqlite3` module, so the `sqlite3` CLI is not required. [`bun`](https://bun.sh) only if you want the visualizer.
 
 ```bash
 # 1. get the skill into the target repo
@@ -83,6 +83,18 @@ uv run adws/adw_prompt.py "reply with a one-line summary of this repo" --agent s
 Re-running `install.py` is safe. It skips every file that already exists and reports what it skipped, so a second run doubles as a drift check. `--force` refreshes stamped code to the skill's current version, but it overwrites **all** stamped files including your `sssf.config.yaml` and your prompts, so commit first.
 
 Green on the smoke test means the whole path works: config validated, session minted, Pi ran, envelope parsed, events landed in `adws/adw_data/sssf.db`. Fix it there before composing anything larger, because every multi-agent chain rides this exact path.
+
+### Upgrading an existing installation
+
+The per-agent session directory was renamed from `pi_sessions/` to `sessions/`. A run
+resumed with `--adw-id` from before the rename will find an empty directory — and pi's
+`--session-id` creates-or-continues, so it starts a fresh session rather than failing,
+and that agent silently loses its history. Before resuming an older run, rename the
+directory under each agent:
+
+    adws/adw_data/sessions/<adw_id>/<agent>/pi_sessions  ->  .../sessions
+
+Or simply start the run again. New installations are unaffected.
 
 ### Which API keys you actually need
 
@@ -148,7 +160,7 @@ There is no DSL here. No framework to learn. It is Python, YAML, agents, and a s
 
 ```yaml
 defaults:
-  coding_agent: pi                 # v1 runs pi only, claude_code is schema-valid and stubbed
+  coding_agent: pi                 # pi (default) or claude_code — both run for real
   model: google/gemini-3.6-flash   # provider/model-id, a bare id can match several providers
   thinking: medium                 # off | minimal | low | medium | high | xhigh | max
   protected_files:                 # no agent may edit the machinery that grades it
@@ -335,12 +347,12 @@ uv run adws/adw_plan.py "add a /health endpoint"              # prints adw_id a1
 uv run adws/adw_build_test.py "implement the plan" --adw-id a1b2c3d4
 ```
 
-Watch a run with the trace db directly:
+Watch a run with the trace db directly — `adw_trace.py` reads it with the stdlib `sqlite3` module, so there is no `sqlite3` CLI to install:
 
 ```bash
-sqlite3 adws/adw_data/sssf.db "select adw_id, status, substr(request,1,60), total_tokens from sessions order by started_at desc limit 10;"
-sqlite3 adws/adw_data/sssf.db "select seq, name, kind, owner, status from phases where adw_id='a1b2c3d4' order by seq;"
-sqlite3 adws/adw_data/sssf.db "select kind, name, pid, command from processes where adw_id='a1b2c3d4' and ended_at is null;"
+uv run adws/adw_trace.py sessions --limit 10
+uv run adws/adw_trace.py phases a1b2c3d4
+uv run adws/adw_trace.py processes
 ```
 
 Reads never block a running workflow, the db is WAL. `install.py` stamps a `justfile` wrapping all of the above, so in a fresh repo these are `just sessions`, `just phases <adw_id>`, `just tail <adw_id>`, and `just procs <adw_id>`.
@@ -354,15 +366,15 @@ Honest edges, because knowing them is cheaper than discovering them.
 | Failure | What actually happens | What to do |
 |---|---|---|
 | The test phase reports green on a fresh install | `quality.py` ships placeholder commands that exit 0. Three ADWs run them as their test phase | Wire your real commands into `quality.py` before trusting `adw_build_test`, `adw_plan_build_test`, or `adw_simple_sdlc`. This is the first thing to customize |
-| A bare model pattern | The same model sits under several providers, so `gemini-3.6-flash` matches three catalog entries and `agents.validate()` refuses to spawn | Always write `provider/model-id` |
-| `just` is not installed | The stamped `justfile` is a convenience wrapper, nothing depends on it | Every recipe is a one-line `uv run` or `sqlite3` command. Open the justfile and run the line yourself |
+| A bare model pattern | On `pi`, the same model sits under several providers, so `gemini-3.6-flash` matches three catalog entries and `agents.validate()` refuses to spawn. On `claude_code` a bare pattern fails the same validation for a simpler reason — there is no catalog, so anything without a `/` is rejected outright | Always write `provider/model-id` |
+| `just` is not installed | The stamped `justfile` is a convenience wrapper, nothing depends on it | Every recipe is a one-line `uv run` command. Open the justfile and run the line yourself |
 | A coding agent hangs silently | No events, no tokens, an empty `raw_output.jsonl`. The trace goes quiet rather than red | Query `processes` for what is alive and kill it children-first. A killed run finalizes its own trace to `fail` |
 | The synced triad drifts | Type, `## Report` example, and `output_type=` disagree, so every call burns correction rounds | Grep the type name and fix all three in one edit |
 | Gates pass, output is bad | Gates check what a predicate can check, not plan quality or code taste | Run the `reviewer`, or read it yourself |
 | An agent edits something it should not | Detected and rolled back after the call, and the phase fails | Expected. Widen that agent's `writes` if the change was legitimate |
 | Commit phase has nothing to commit | `commit_all` raises if the cwd is not a git repo or nothing changed | `git init` with one commit first. A no-op build fails the phase rather than committing nothing |
 | `install.py --force` | Overwrites **all** stamped files, config and prompts included | Commit before you force |
-| `coding_agent: claude_code` | Schema-valid, but `agent_cc.py` raises | v1 is Pi only |
+| A `claude_code` agent declares `harness_engineering` | Rejected at validation, before anything spawns | Extensions are pi-only. Remove the key, or run that agent on `coding_agent: pi` |
 
 Also missing on purpose, so you know what to add: this runs on your current branch. For real work you want a branch per run, a sandbox around the agent, and a merge step at the end.
 

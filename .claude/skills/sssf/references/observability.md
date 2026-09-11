@@ -156,3 +156,27 @@ SELECT ... FROM events WHERE adw_id = ? AND rowid > ? ORDER BY rowid LIMIT 500;
 ```
 
 Keep the highest `rowid` returned as the next cursor. History is **the same queries** with filters, lazy-paged as the engineer scrolls or drills in — one mechanism serves both live and past runs, which is why there is no separate replay path.
+
+## Reading the trace by hand
+
+`adws/adw_trace.py` reads `sssf.db` with the stdlib `sqlite3` module, opened read-only.
+There is no `sqlite3` CLI dependency anymore — that binary is absent on stock Windows,
+so every cookbook line that used to shell out to it failed there. The reader opens the
+same WAL database the tracer writes, so reads never block a running ADW.
+
+```bash
+uv run adws/adw_trace.py sessions [--limit N]      # the last N runs, newest first (default 20)
+uv run adws/adw_trace.py phases <adw_id>           # phase status in sequence
+uv run adws/adw_trace.py events <adw_id> [--type T]  # the event list, oldest first; filter by type
+uv run adws/adw_trace.py gates <adw_id>            # gate results: passed, attempt, violations
+uv run adws/adw_trace.py processes                 # every live process across every run, with pids
+```
+
+Every subcommand accepts `--db <path>` (default `adws/adw_data/sssf.db`). Long cell
+values — a traceback, a JSON blob — are flattened to one line and truncated so the table
+stays aligned; pass the global `--full` to disable truncation and see the whole value,
+which matters most for a phase's `error` or a gate's `violations_json`.
+
+`processes` has no `adw_id` filter — it lists what is alive system-wide, on the theory
+that a stuck run is usually the only thing running. Grep the output by `adw_id` (its
+first column) if more than one run is live.
