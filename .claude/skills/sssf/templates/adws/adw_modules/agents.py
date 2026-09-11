@@ -16,8 +16,8 @@ from typing import Optional
 import yaml
 
 from . import agent_pi, permissions, prompts
-from .data_types import (AgentCall, AgentConfig, EnvelopeBase, EventRecord,
-                         GateCheck, GateReport, Phase, PiRequest, SSSFConfig,
+from .data_types import (AgentCall, AgentConfig, AgentRequest, EnvelopeBase,
+                         EventRecord, GateCheck, GateReport, Phase, SSSFConfig,
                          UsageBreakdown)
 from .utils import new_id
 
@@ -106,12 +106,12 @@ def execute(run, phase: Phase, call: AgentCall) -> EnvelopeBase:
     # Parse retries and gate corrections re-enter the SAME pi session, so the
     # last send is the one whose context occupancy is current — while spend is
     # the opposite: every send costs, so usage accumulates across all of them.
-    latest: agent_pi.PiResult | None = None
+    latest: agent_pi.AgentResult | None = None
     spent = UsageBreakdown()
 
-    def send(prompt_text: str) -> agent_pi.PiResult:
+    def send(prompt_text: str) -> agent_pi.AgentResult:
         nonlocal latest
-        request = PiRequest(
+        request = AgentRequest(
             prompt=prompt_text,
             system_prompt=system_text,
             model=agent.model,

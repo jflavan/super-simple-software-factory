@@ -370,7 +370,7 @@ class EventRecord(BaseModel):
 
 # ── Pi coding agent interface ────────────────────────────────────────────────
 
-class PiRequest(BaseModel):
+class AgentRequest(BaseModel):
     """Everything one non-interactive pi run needs."""
 
     prompt: str
@@ -433,7 +433,7 @@ class UsageBreakdown(BaseModel):
             setattr(self, field, getattr(self, field) + getattr(other, field))
 
 
-class PiResult(BaseModel):
+class AgentResult(BaseModel):
     text: str = ""
     returncode: int = 0
     session_id: str = ""
