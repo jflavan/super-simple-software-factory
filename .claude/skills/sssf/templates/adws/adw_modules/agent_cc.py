@@ -16,11 +16,12 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import uuid
 from pathlib import Path
 
 from .data_types import AgentRequest
-from .utils import resolve_argv
+from .utils import now_iso, resolve_argv
 
 THINKING_TOKENS = {
     "off": 0,
@@ -214,3 +215,103 @@ def build_command(request: AgentRequest, session_uuid_value: str,
         cmd += ["--allowedTools", ",".join(tools)]
     cmd.append(request.prompt)
     return resolve_argv(cmd)
+
+
+RESULT_SNIPPET_CHARS = 20_000
+ARG_VALUE_CHARS = 20_000
+LABEL_CHARS = 80
+
+# The arg that identifies a call at a glance, in the order Claude Code's tools
+# tend to use. Mirrors agent_pi.PRIMARY_ARGS so labels read the same in the
+# trace regardless of which backend produced them.
+PRIMARY_ARGS = ("command", "file_path", "path", "pattern", "query", "url")
+
+
+def _clip(text: str, limit: int) -> str:
+    return text if len(text) <= limit else text[:limit].rstrip() + "…"
+
+
+def _label(tool: str, args: dict) -> str:
+    """One-line human name for a tool call: `Bash: dotnet build`."""
+    value = next((args[key] for key in PRIMARY_ARGS
+                  if isinstance(args.get(key), str) and args[key].strip()), "")
+    if not value:
+        value = next((v for v in args.values() if isinstance(v, str) and v.strip()), "")
+    value = " ".join(str(value).split())
+    return f"{tool}: {_clip(value, LABEL_CHARS)}" if value else tool
+
+
+def _result_text(block: dict) -> str:
+    """Claude Code's tool_result content is a string or a list of text blocks."""
+    content = block.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(part.get("text", "") for part in content
+                       if isinstance(part, dict) and part.get("type") == "text")
+    return ""
+
+
+class CcToolCallTracker:
+    """Folds Claude Code's tool stream into ONE normalized record per call.
+
+    Claude Code announces a call as a `tool_use` block inside an assistant
+    message and returns it as a `tool_result` block inside a later user
+    message. Only the result knows the outcome, so that is where a record is
+    emitted — and a single user message may close several calls at once, which
+    is why observe() returns a list.
+
+    The record shape is identical to agent_pi.ToolCallTracker's, so the tracer,
+    the console and the UI never learn which backend produced a call.
+    """
+
+    def __init__(self) -> None:
+        self._open: dict[str, dict] = {}
+
+    def observe(self, event: dict) -> list[dict]:
+        etype = event.get("type", "")
+        content = (event.get("message") or {}).get("content") or []
+        if not isinstance(content, list):
+            return []
+        if etype == "assistant":
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "tool_use":
+                    self._announce(block.get("id"), block.get("name"), block.get("input"))
+            return []
+        if etype != "user":
+            return []
+        return [self._close(block) for block in content
+                if isinstance(block, dict) and block.get("type") == "tool_result"]
+
+    def _announce(self, call_id, tool, args) -> None:
+        if not call_id:
+            return
+        self._open[str(call_id)] = {
+            "tool": tool or "",
+            "args": args or {},
+            "started_at": now_iso(),      # wall clock, for the row
+            "clock": time.monotonic(),    # monotonic, for duration
+        }
+
+    def _close(self, block: dict) -> dict:
+        call_id = str(block.get("tool_use_id") or "")
+        opened = self._open.pop(call_id, {})
+        tool = str(opened.get("tool") or "tool")
+        args = opened.get("args") or {}
+        record = {
+            "tool": tool,
+            "tool_call_id": call_id,
+            "args": {key: _clip(value, ARG_VALUE_CHARS) if isinstance(value, str) else value
+                     for key, value in args.items()},
+            "ok": not block.get("is_error", False),
+            "label": _label(tool, args),
+            "ended_at": now_iso(),
+        }
+        text = _result_text(block)
+        if text:
+            record["result_snippet"] = _clip(text, RESULT_SNIPPET_CHARS)
+        if opened.get("started_at"):
+            record["started_at"] = opened["started_at"]
+        if opened.get("clock"):
+            record["duration_ms"] = int((time.monotonic() - opened["clock"]) * 1000)
+        return record
