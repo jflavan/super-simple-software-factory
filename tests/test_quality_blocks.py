@@ -133,15 +133,17 @@ def test_the_trace_payload_carries_the_cwd_and_the_tier(tmp_path, monkeypatch):
 
 def test_an_absolute_cwd_is_refused(tmp_path):
     """`Path(root) / "/elsewhere"` discards the root and succeeds in the wrong place."""
+    from pydantic import ValidationError
     for escape in ("/etc", "C:/Windows", "D:\\other"):
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             QualityCheckSpec(name="x", area="backend", operation="build",
                              argv=["true"], cwd=escape)
 
 
 def test_a_cwd_that_climbs_out_of_the_repo_is_refused():
+    from pydantic import ValidationError
     for escape in ("..", "../sibling", "apps/../../elsewhere"):
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             QualityCheckSpec(name="x", area="backend", operation="build",
                              argv=["true"], cwd=escape)
 
@@ -212,72 +214,88 @@ def test_a_failing_block_is_reported_with_its_output(tmp_path, monkeypatch):
     assert "boom" in result.failures[0]
 
 
-def _generate(monkeypatch, tmp_path, source: str):
-    """Write a real quality_blocks.py into a throwaway copy of adw_modules.
+@pytest.fixture
+def generated_package(tmp_path, monkeypatch):
+    """A throwaway copy of adw_modules whose quality_blocks.py we control.
 
-    The loader is what is under test here, so it has to do its real work: find
-    a real module on a real path and import it. Monkeypatching it would test
-    the monkeypatch.
+    Call it with the source to write, or with None for "no generated file".
+
+    sys.modules is snapshotted and fully restored, dropping anything the import
+    added. monkeypatch.delitem restores only what it DELETED, and
+    `adw_modules.quality_blocks` is never in sys.modules to begin with — so
+    without this it survives the test, and find_spec consults sys.modules
+    before the filesystem. The leaked module carries a different
+    QualityCheckSpec class object, built from the shadowed data_types, so the
+    next test that exercises the real loader fails validation by file order.
     """
+    import importlib
     import shutil
     import sys
-    package = tmp_path / "adw_modules"
-    shutil.copytree(Path(quality.__file__).parent, package,
-                    ignore=shutil.ignore_patterns("__pycache__"))
-    (package / "quality_blocks.py").write_text(source, encoding="utf-8")
-    monkeypatch.syspath_prepend(str(tmp_path))
+
+    before = {name: module for name, module in sys.modules.items()
+              if name == "adw_modules" or name.startswith("adw_modules.")}
+
+    def build(source: str | None):
+        package = tmp_path / "adw_modules"
+        if not package.exists():
+            shutil.copytree(Path(quality.__file__).parent, package,
+                            ignore=shutil.ignore_patterns("__pycache__"))
+        generated = package / "quality_blocks.py"
+        if source is None:
+            generated.unlink(missing_ok=True)
+        else:
+            generated.write_text(source, encoding="utf-8")
+        monkeypatch.syspath_prepend(str(tmp_path))
+        for name in list(sys.modules):
+            if name == "adw_modules" or name.startswith("adw_modules."):
+                del sys.modules[name]
+        return importlib.import_module("adw_modules.quality")
+
+    yield build
+
     for name in list(sys.modules):
         if name == "adw_modules" or name.startswith("adw_modules."):
-            monkeypatch.delitem(sys.modules, name, raising=False)
-    import importlib
-    return importlib.import_module("adw_modules.quality")
+            del sys.modules[name]
+    sys.modules.update(before)
 
 
-def test_a_real_generated_file_is_loaded(tmp_path, monkeypatch):
-    module = _generate(monkeypatch, tmp_path,
-                       "from .data_types import QualityCheckSpec\n"
-                       "BLOCKS = [QualityCheckSpec(name='t', area='backend',\n"
-                       "                           operation='test', argv=['echo', 'x'])]\n")
+def test_a_real_generated_file_is_loaded(generated_package):
+    module = generated_package(
+        "from .data_types import QualityCheckSpec\n"
+        "BLOCKS = [QualityCheckSpec(name='t', area='backend',\n"
+        "                           operation='test', argv=['echo', 'x'])]\n")
     assert [b.name for b in module.blocks()] == ["t"]
 
 
-def test_no_generated_file_falls_back_to_placeholders(tmp_path, monkeypatch):
-    import shutil, sys, importlib
-    package = tmp_path / "adw_modules"
-    shutil.copytree(Path(quality.__file__).parent, package,
-                    ignore=shutil.ignore_patterns("__pycache__"))
-    (package / "quality_blocks.py").unlink(missing_ok=True)
-    monkeypatch.syspath_prepend(str(tmp_path))
-    for name in list(sys.modules):
-        if name == "adw_modules" or name.startswith("adw_modules."):
-            monkeypatch.delitem(sys.modules, name, raising=False)
-    module = importlib.import_module("adw_modules.quality")
+def test_no_generated_file_falls_back_to_placeholders(generated_package):
+    module = generated_package(None)
     assert [b.name for b in module.blocks()] == ["test", "lint", "typecheck", "build"]
 
 
-def test_a_syntax_error_in_the_generated_file_is_fatal(tmp_path, monkeypatch):
-    module = _generate(monkeypatch, tmp_path, "BLOCKS = [\n")
+def test_a_syntax_error_in_the_generated_file_is_fatal(generated_package):
+    module = generated_package("BLOCKS = [\n")
     with pytest.raises(SyntaxError):
         module.blocks()
 
 
-def test_a_generated_file_without_BLOCKS_is_fatal(tmp_path, monkeypatch):
-    module = _generate(monkeypatch, tmp_path, "SPECS = []\n")
+def test_a_generated_file_without_BLOCKS_is_fatal(generated_package):
+    module = generated_package("SPECS = []\n")
     with pytest.raises(ImportError):
         module.blocks()
 
 
-def test_a_missing_dependency_named_like_the_module_is_still_fatal(tmp_path, monkeypatch):
+def test_a_missing_dependency_named_like_the_module_is_still_fatal(generated_package):
     """The hole find_spec closes: a self-named missing import must not look absent."""
-    module = _generate(monkeypatch, tmp_path, "import quality_blocks\nBLOCKS = []\n")
+    module = generated_package("import quality_blocks\nBLOCKS = []\n")
     with pytest.raises(ModuleNotFoundError):
         module.blocks()
 
 
-def test_a_generated_file_emitting_dicts_fails_at_the_boundary(tmp_path, monkeypatch):
+def test_a_generated_file_emitting_dicts_fails_at_the_boundary(generated_package):
     """Not later, inside _run_tier, with an AttributeError far from the cause."""
-    module = _generate(monkeypatch, tmp_path, "BLOCKS = [{'name': 'a'}]\n")
-    with pytest.raises(Exception):
+    from pydantic import ValidationError
+    module = generated_package("BLOCKS = [{'name': 'a'}]\n")
+    with pytest.raises(ValidationError):
         module.blocks()
 
 
@@ -325,15 +343,15 @@ def test_a_test_block_is_traced_as_a_test(tmp_path, monkeypatch):
     assert events[0].payload["operation"] == "test"
 
 
-def test_a_generated_block_runs_end_to_end(tmp_path, monkeypatch):
+def test_a_generated_block_runs_end_to_end(tmp_path, generated_package):
     """blocks() -> _run_tier -> _run, with a real subprocess and a real artifact."""
-    module = _generate(monkeypatch, tmp_path,
-                       "from .data_types import QualityCheckSpec\n"
-                       "import sys\n"
-                       "BLOCKS = [QualityCheckSpec(name='hello', area='backend',\n"
-                       "                           operation='test',\n"
-                       "                           argv=[sys.executable, '-c',\n"
-                       "                                 \"print('ran')\"])]\n")
+    module = generated_package(
+        "from .data_types import QualityCheckSpec\n"
+        "import sys\n"
+        "BLOCKS = [QualityCheckSpec(name='hello', area='backend',\n"
+        "                           operation='test',\n"
+        "                           argv=[sys.executable, '-c',\n"
+        "                                 \"print('ran')\"])]\n")
     work = tmp_path / "work"
     work.mkdir()
 

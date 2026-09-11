@@ -61,7 +61,7 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
             break
 
         with run.phase(PhaseParams(name=f"fix_{i}", kind="agent", owner="builder", retries=1,
-                                   description="Repair what the suite reported, from its "
+                                   description="Repair what the fast tier reported, from its "
                                                "verbatim output")) as ph:
             previous = ph.call(AgentCall(output_type=BuildOutput, prompt=prompt,
                                          previous=quality.as_envelope(test, "fast checks"),

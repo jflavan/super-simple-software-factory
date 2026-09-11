@@ -54,7 +54,8 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
     quality_result = None
     for i in range(1, MAX_FIX_LOOPS + 1):
         with run.phase(PhaseParams(name=f"verify_{i}", kind="code", owner="quality",
-                                   description="Lint, typecheck, and build before testing")) as ph:
+                                   description="Run every quality block, both tiers, before "
+                                               "accepting the work")) as ph:
             quality_result = quality.run_quality(run)
             record(ph, quality_result)
 
@@ -70,7 +71,7 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
         # Whichever block failed becomes the builder's spec — verbatim command
         # output, no parser standing between the failure and the fix.
         broken = quality_result if not quality_result.passed else test_result
-        what = "verification" if not quality_result.passed else "tests"
+        what = "verification"
         with run.phase(PhaseParams(name=f"fix_{i}", kind="agent", owner="builder", retries=1,
                                    description=f"Resolve the reported {what} failures")) as ph:
             previous = ph.call(AgentCall(output_type=BuildOutput, prompt=prompt,

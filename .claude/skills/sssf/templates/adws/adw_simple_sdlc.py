@@ -105,7 +105,7 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
             break
 
         with run.phase(PhaseParams(name=f"fix_{i}", kind="agent", owner="builder", retries=1,
-                                   description="Repair what the suite reported, from its "
+                                   description="Repair what the fast tier reported, from its "
                                                "verbatim output")) as ph:
             build = ph.call(AgentCall(output_type=BuildOutput, prompt=prompt,
                                       previous=quality.as_envelope(test, "fast checks"),
@@ -144,7 +144,7 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
                 and review is not None and review.approved)
     if verified:
         with run.phase(PhaseParams(name="commit_build", kind="code", owner="git",
-                                   description="Land the code only now: green suite, approved review")) as ph:
+                                   description="Land the code only now: green fast tier, approved review")) as ph:
             commit(ph, build)
 
         with run.phase(PhaseParams(name="changes", kind="code", owner="git",
@@ -171,7 +171,7 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
             commit(ph, document)
 
     return run.finish(accepted=verified,
-                      reason="the suite or the review never came back clean")
+                      reason="the fast tier or the review never came back clean")
 
 
 if __name__ == "__main__":

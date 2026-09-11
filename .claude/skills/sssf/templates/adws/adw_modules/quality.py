@@ -207,11 +207,12 @@ def _run_tier(run, tiers: set[QualityTier]) -> QualityResult:
     selects nothing. Neither is something a builder can repair, so neither
     belongs in the repair loop.
     """
-    selected = [spec for spec in blocks() if spec.tier in tiers]
+    defined = blocks()
+    selected = [spec for spec in defined if spec.tier in tiers]
     if not selected:
         raise RuntimeError(
             f"no quality blocks in tier(s) {sorted(tiers)}: "
-            f"{len(blocks())} block(s) defined, none selected. Check "
+            f"{len(defined)} block(s) defined, none selected. Check "
             f"adws/adw_modules/quality_blocks.py, or re-run `install.py --doctor`.")
     checks = [_run(spec, run) for spec in selected]
     # A failure is the command, its exit code, and what it actually printed —
