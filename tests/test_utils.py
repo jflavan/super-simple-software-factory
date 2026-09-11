@@ -1,5 +1,6 @@
 """utils: argv resolution and the operator environment."""
 
+import os
 from pathlib import Path
 
 from adw_modules import utils
@@ -23,3 +24,32 @@ def test_resolve_argv_passes_a_missing_binary_through_unchanged():
 
 def test_resolve_argv_handles_an_empty_argv():
     assert utils.resolve_argv([]) == []
+
+
+def test_venv_bin_dir_uses_scripts_on_windows():
+    assert utils.venv_bin_dir(r"C:\tmp\.venv", windows=True).endswith("Scripts")
+
+
+def test_venv_bin_dir_uses_bin_elsewhere():
+    assert utils.venv_bin_dir("/tmp/.venv", windows=False).endswith("bin")
+
+
+def test_operator_env_strips_the_venv_bin_dir(monkeypatch):
+    venv = str(Path.cwd() / "sssf-test-venv")
+    venv_bin = utils.venv_bin_dir(venv)
+    other = str(Path.cwd() / "real-tools")
+    monkeypatch.setenv("VIRTUAL_ENV", venv)
+    monkeypatch.setenv("PATH", os.pathsep.join([venv_bin, other]))
+
+    env = utils.operator_env()
+
+    assert "VIRTUAL_ENV" not in env
+    assert venv_bin not in env["PATH"].split(os.pathsep)
+    assert other in env["PATH"].split(os.pathsep)
+
+
+def test_operator_env_is_a_passthrough_without_a_venv(monkeypatch):
+    monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+    monkeypatch.setenv("PATH", "/usr/bin")
+
+    assert utils.operator_env()["PATH"] == "/usr/bin"

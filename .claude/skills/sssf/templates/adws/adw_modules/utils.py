@@ -14,6 +14,19 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+def venv_bin_dir(venv: str, windows: bool | None = None) -> str:
+    """The directory a virtualenv puts executables in.
+
+    Split out, with an explicit `windows` flag, so both branches are testable
+    on either platform. uv writes to `Scripts` on Windows and `bin` elsewhere;
+    operator_env previously stripped only `bin`, so on Windows it stripped
+    nothing and the shadowing hazard it documents went unmitigated.
+    """
+    if windows is None:
+        windows = os.name == "nt"
+    return str(Path(venv) / ("Scripts" if windows else "bin"))
+
+
 def operator_env() -> dict[str, str]:
     """The engineer's own environment, as their shell would hand it over.
 
@@ -33,8 +46,9 @@ def operator_env() -> dict[str, str]:
     venv = env.pop("VIRTUAL_ENV", "")
     if not venv:
         return env
-    venv_bin = str(Path(venv) / "bin")
-    parts = [p for p in env.get("PATH", "").split(os.pathsep) if p and p != venv_bin]
+    venv_bin = os.path.normcase(venv_bin_dir(venv).rstrip("\\/"))
+    parts = [p for p in env.get("PATH", "").split(os.pathsep)
+             if p and os.path.normcase(p.rstrip("\\/")) != venv_bin]
     env["PATH"] = os.pathsep.join(parts)
     return env
 
