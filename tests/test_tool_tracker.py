@@ -101,3 +101,30 @@ def test_cc_tracker_ignores_unrelated_events():
     tracker = agent_cc.CcToolCallTracker()
 
     assert tracker.observe({"type": "system", "subtype": "init"}) == []
+
+
+def test_cc_tracker_keeps_the_first_sighting_of_a_call(monkeypatch):
+    """A second announcement must not restart the clock.
+
+    Overwriting would reset started_at and understate duration_ms. pi's
+    tracker merges for the same reason.
+
+    now_iso() has millisecond precision, so two calls in quick succession can
+    return the same string by chance and let an unconditional-overwrite bug
+    pass undetected. now_iso is monkeypatched to return successive distinct
+    values so the assertion is deterministic rather than a sleep-based timing
+    check.
+    """
+    values = iter(["2020-01-01T00:00:00.000Z", "2020-01-01T00:00:00.999Z"])
+    monkeypatch.setattr(agent_cc, "now_iso", lambda: next(values))
+    tracker = agent_cc.CcToolCallTracker()
+
+    tracker.observe({"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "id": "t", "name": "Bash", "input": {"command": "sleep"}},
+    ]}})
+    first_seen = tracker._open["t"]["started_at"]
+    tracker.observe({"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "id": "t", "name": "Bash", "input": {"command": "sleep"}},
+    ]}})
+
+    assert tracker._open["t"]["started_at"] == first_seen

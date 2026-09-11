@@ -284,13 +284,22 @@ class CcToolCallTracker:
                 if isinstance(block, dict) and block.get("type") == "tool_result"]
 
     def _announce(self, call_id, tool, args) -> None:
+        """First sighting starts the clock; a later sighting only fills gaps.
+
+        Mirrors agent_pi's tracker deliberately. Claude Code's current stream
+        sends one fully-formed assistant message per turn, so a second sighting
+        of the same id is not expected — but overwriting would silently reset
+        the clock and understate duration_ms, and the two trackers are parallel
+        implementations that should not diverge on a detail like this.
+        """
         if not call_id:
             return
+        known = self._open.get(str(call_id), {})
         self._open[str(call_id)] = {
-            "tool": tool or "",
-            "args": args or {},
-            "started_at": now_iso(),      # wall clock, for the row
-            "clock": time.monotonic(),    # monotonic, for duration
+            "tool": tool or known.get("tool", ""),
+            "args": args or known.get("args", {}),
+            "started_at": known.get("started_at") or now_iso(),   # wall clock, for the row
+            "clock": known.get("clock") or time.monotonic(),      # monotonic, for duration
         }
 
     def _close(self, block: dict) -> dict:
