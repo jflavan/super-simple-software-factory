@@ -1,6 +1,7 @@
 """The Claude Code backend: pure mappings first, subprocess wiring last."""
 
 import pytest
+import uuid as uuid_module
 
 from adw_modules import agent_cc
 
@@ -109,3 +110,26 @@ def test_context_window_is_known_for_a_listed_model():
 
 def test_context_window_falls_back_for_an_unlisted_model():
     assert agent_cc.context_window("anthropic", "claude-future-9") == 200_000
+
+
+def test_first_send_mints_a_uuid_and_does_not_resume(tmp_path):
+    minted, resume = agent_cc.session_uuid(str(tmp_path), "sssf-abcd1234-builder-9f2a")
+
+    assert resume is False
+    uuid_module.UUID(minted)  # raises if it is not a real UUID
+
+
+def test_a_later_send_reuses_the_same_uuid_and_resumes(tmp_path):
+    first, _ = agent_cc.session_uuid(str(tmp_path), "sssf-abcd1234-builder-9f2a")
+
+    second, resume = agent_cc.session_uuid(str(tmp_path), "sssf-abcd1234-builder-9f2a")
+
+    assert second == first
+    assert resume is True
+
+
+def test_two_agents_get_different_uuids(tmp_path):
+    builder, _ = agent_cc.session_uuid(str(tmp_path), "sssf-abcd1234-builder-9f2a")
+    planner, _ = agent_cc.session_uuid(str(tmp_path), "sssf-abcd1234-planner-1b3c")
+
+    assert builder != planner

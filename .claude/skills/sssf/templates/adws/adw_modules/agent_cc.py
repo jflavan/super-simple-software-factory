@@ -14,6 +14,10 @@ environment).
 
 from __future__ import annotations
 
+import json
+import uuid
+from pathlib import Path
+
 THINKING_TOKENS = {
     "off": 0,
     "minimal": 1024,
@@ -126,3 +130,29 @@ def resolve_model(pattern: str) -> tuple[str, str]:
 def context_window(provider: str, model_id: str) -> int:
     """The model's context ceiling. 0 is never returned; unknown ids get a floor."""
     return CONTEXT_WINDOWS.get(model_id, DEFAULT_CONTEXT_WINDOW)
+
+
+SESSION_MAP_NAME = "cc_sessions.json"
+
+
+def session_uuid(session_dir: str, sssf_session_id: str) -> tuple[str, bool]:
+    """Map an SSSF session id to a Claude Code UUID. Returns (uuid, resume).
+
+    The mapping is persisted beside the agent's other session state, because it
+    has to survive across sends within a phase AND across the ADW processes
+    that join an existing --adw-id. A known id resumes; an unknown one mints.
+
+    This is what preserves the correction guarantee: a JSON-parse retry or a
+    gate correction re-enters the SAME context window, exactly as it does
+    under pi.
+    """
+    path = Path(session_dir) / SESSION_MAP_NAME
+    mapping = json.loads(path.read_text()) if path.exists() else {}
+    existing = mapping.get(sssf_session_id)
+    if existing:
+        return existing, True
+    minted = str(uuid.uuid4())
+    mapping[sssf_session_id] = minted
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(mapping, indent=2))
+    return minted, False
