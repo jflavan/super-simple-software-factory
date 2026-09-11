@@ -127,7 +127,7 @@ def node_packages(root: Path, marker: str,
         try:
             package = json.loads(
                 manifest.read_text(encoding="utf-8", errors="replace"))
-        except (json.JSONDecodeError, UnicodeDecodeError):
+        except json.JSONDecodeError:   # errors="replace" cannot raise
             # A broken manifest is the repo's problem, not a reason to abort an
             # install. A caller that passed `unreadable` finds out why a
             # package it expected is missing.

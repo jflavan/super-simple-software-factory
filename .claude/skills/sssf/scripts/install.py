@@ -286,8 +286,9 @@ def main() -> int:
         # UnicodeEncodeError it exists to prevent, before anyone could read it.
         print("\n  windows: optional - set PYTHONUTF8=1 and PYTHONIOENCODING=utf-8")
         print("           to see the banner's box-drawing characters instead of '?'.")
-        print("           Not required: a cp1252 console degrades them rather than")
-        print("           killing the run, and every file is read and written utf-8.")
+        print("           Not required: piping output to a cp1252 stream degrades")
+        print("           them rather than killing the run, and every file the")
+        print("           factory reads or writes names utf-8 explicitly.")
     return 0
 
 

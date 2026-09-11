@@ -43,22 +43,27 @@ Re-running is mostly safe. `install.py` skips every **stamped** file that alread
 4. **Gitignore** — `install.py` appends five entries for you; confirm they landed: `adws/adw_data/sessions/`, `adws/adw_data/sssf.db*`, `.env`, `__pycache__/`, and `*.pyc`. The first three are runtime or secrets. The last two matter because the ADWs are Python and importing `adw_modules` writes bytecode next to it — chains ending in a commit phase call `git add -A`, and without those entries a stamped repo commits its own `.pyc` files.
 5. **Git repo** — ADWs that end in a commit phase call `git_helper.commit_all`, which raises if the cwd is not a git repository. Run `git init` and make a first commit before using `adw_plan_build.py`, `adw_plan_build_test.py`, or `adw_simple_sdlc.py`. `adw_document.py` needs one too: it measures the change with `git diff` against a base ref (`main` by default, `--base` to override).
 6. **Windows: optional, and no longer load-bearing.** The run banner prints box-drawing
-   and arrow characters that a default cp1252 console cannot encode. That used to kill the
-   run — `rich` raised `UnicodeEncodeError` mid-phase, the process died before it could
-   record the phase's outcome, and the session's row stayed `running` in the trace forever.
+   and arrow characters. Writing one to a cp1252 stream used to kill the run — `rich`
+   raised `UnicodeEncodeError` mid-phase, the process died before it could record the
+   phase's outcome, and the session's row stayed `running` in the trace forever.
 
-   It no longer does. Every file the factory reads or writes names `utf-8` explicitly
-   rather than inheriting the locale codec, and the console switches stdout to
-   `errors="replace"` on the way up, so an unencodable glyph prints as `?` instead of
-   raising. The trace is UTF-8 in SQLite either way, so the visualizer shows the real
-   characters whatever the terminal could render.
+   **The stream, not the terminal.** Since PEP 528 a real Windows console is UTF-8
+   whatever the code page says, so what actually triggered this was *redirected* output —
+   a pipe, a CI log, `> run.txt` — plus any console forced back to a code page by
+   `PYTHONIOENCODING` or legacy mode. Which is why it looked intermittent.
+
+   It no longer happens either way. Every file the factory reads or writes names `utf-8`
+   explicitly rather than inheriting the locale codec, and both `console.py` and
+   `adw_trace.py` put stdout on `errors="replace"` before printing anything, so an
+   unencodable glyph becomes `?` instead of raising. The trace is UTF-8 in SQLite
+   regardless, so the visualizer shows the real characters whatever the terminal could.
 
    Setting these still gets you the glyphs instead of `?`, which is nicer to read:
 
        PYTHONUTF8=1
        PYTHONIOENCODING=utf-8
 
-   Windows Terminal with a UTF-8 code page does the same. Non-Windows consoles are
+   Windows Terminal with a UTF-8 code page does the same. Non-Windows systems are
    unaffected, and always were.
 7. **Smoke test** — `just demo` runs two cheap read-only workflows back to back, or run the smallest ADW directly:
 

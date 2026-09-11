@@ -116,7 +116,7 @@ Check each pid still matches the command the trace recorded before you signal it
 
 `processes` rows with `ended_at IS NULL` are the live ones. If `procs` shows a pi child but the phase has produced no `tool_call` events and its `raw_output.jsonl` is empty, the agent never got started properly — check the model resolves and that nothing is blocking the subprocess, rather than waiting it out.
 
-A killed run still closes its own trace. `session.ensure` installs a SIGTERM/SIGINT handler that finalizes the session to `fail` and closes its process rows on the way out, so a plain `kill <pid>` marks the run dead rather than leaving the db claiming work is in flight. A session that reads `running` with no live process means the workflow died *without* a signal: `kill -9`, a power loss, or the OS killing it. (The cp1252 banner crash used to be the common cause on Windows and no longer is — the console degrades an unencodable glyph to `?` rather than raising.)
+A killed run still closes its own trace. `session.ensure` installs a SIGTERM/SIGINT handler that finalizes the session to `fail` and closes its process rows on the way out, so a plain `kill <pid>` marks the run dead rather than leaving the db claiming work is in flight. A session that reads `running` with no live process means the workflow died *without* a signal: `kill -9`, a power loss, or the OS killing it. (Writing the banner to a cp1252 stream — piped output or a CI log on Windows — used to be the common cause and no longer is: stdout runs with `errors="replace"`, so an unencodable glyph degrades to `?` rather than raising.)
 
 ## When a check fails
 
