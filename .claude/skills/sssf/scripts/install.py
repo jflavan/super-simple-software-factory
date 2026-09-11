@@ -96,9 +96,12 @@ def main() -> int:
     print("\n  no just? the raw form of step 2 is:")
     print("     uv run adws/adw_prompt.py \"say hello\" --agent scout")
     if os.name == "nt":
-        print("\n  windows: set PYTHONUTF8=1 and PYTHONIOENCODING=utf-8 in your shell —")
-        print("           the run banner cannot encode on a cp1252 console, and the")
-        print("           crash leaves the session's trace row stuck at 'running'")
+        # ASCII only, deliberately. This is the one message that must survive the
+        # very console it is warning about — an em dash here would raise the
+        # UnicodeEncodeError it exists to prevent, before anyone could read it.
+        print("\n  windows: set PYTHONUTF8=1 and PYTHONIOENCODING=utf-8 in your shell.")
+        print("           The run banner cannot encode on a cp1252 console, and the")
+        print("           crash leaves the session's trace row stuck at 'running'.")
     return 0
 
 
