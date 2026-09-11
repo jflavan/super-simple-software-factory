@@ -258,9 +258,13 @@ class FakeProcess:
         self.stderr = _FakeStderr()
         self.pid = 4242
         self._returncode = returncode
+        self.killed = False
 
     def wait(self):
         return self._returncode
+
+    def kill(self):
+        self.killed = True
 
 
 class _FakeStderr:
@@ -367,3 +371,48 @@ def test_run_fills_the_usage_breakdown(tmp_path, monkeypatch):
     assert result.usage.cache_write_tokens == 3
     assert result.usage.total_tokens == 120
     assert result.usage.total_cost == pytest.approx(0.5)
+
+
+def test_run_rejects_a_non_success_terminal_subtype(tmp_path, monkeypatch):
+    """A max-turns exhaustion must not be reported as a JSON problem."""
+    events = _stream(
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": "..."}],
+         "usage": {"input_tokens": 10, "output_tokens": 1}}},
+        {"type": "result", "subtype": "error_max_turns", "total_cost_usd": 0.02,
+         "usage": {}},
+    )
+    monkeypatch.setattr(agent_cc, "_popen", lambda *a, **k: FakeProcess(events))
+
+    with pytest.raises(RuntimeError, match="error_max_turns"):
+        agent_cc.run(_request(session_dir=str(tmp_path),
+                              raw_output_path=str(tmp_path / "raw.jsonl")))
+
+
+def test_run_accepts_an_explicit_success_subtype(tmp_path, monkeypatch):
+    events = _stream({"type": "result", "subtype": "success", "result": "done",
+                      "total_cost_usd": 0.0, "usage": {}})
+    monkeypatch.setattr(agent_cc, "_popen", lambda *a, **k: FakeProcess(events))
+
+    assert agent_cc.run(_request(session_dir=str(tmp_path),
+                                 raw_output_path=str(tmp_path / "raw.jsonl"))).text == "done"
+
+
+def test_run_reaps_the_child_when_a_callback_raises(tmp_path, monkeypatch):
+    """An exception mid-stream must not leave the child alive and untracked."""
+    events = _stream({"type": "assistant", "message": {"content": []}},
+                     {"type": "result", "subtype": "success", "result": "ok",
+                      "total_cost_usd": 0.0, "usage": {}})
+    process = FakeProcess(events)
+    monkeypatch.setattr(agent_cc, "_popen", lambda *a, **k: process)
+    exited = []
+
+    def boom(event):
+        raise ValueError("callback failed")
+
+    with pytest.raises(ValueError, match="callback failed"):
+        agent_cc.run(_request(session_dir=str(tmp_path),
+                              raw_output_path=str(tmp_path / "raw.jsonl")),
+                     on_event=boom, on_exit=exited.append)
+
+    assert process.killed is True, "the child must be killed, not left to the collector"
+    assert exited == [4242], "the tracer must learn the pid is gone"

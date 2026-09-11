@@ -404,20 +404,35 @@ def run(request: AgentRequest, on_event: Optional[Callable[[dict], None]] = None
     if on_spawn:
         on_spawn(process.pid)
 
-    with raw_path.open("a") as raw:
-        for line in process.stdout:
-            raw.write(line)
-            raw.flush()                      # events land on disk as they happen
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            _absorb(result, event)
-            if on_event:
-                on_event(event)
+    terminal_subtype = ""
+    try:
+        with raw_path.open("a") as raw:
+            for line in process.stdout:
+                raw.write(line)
+                raw.flush()                      # events land on disk as they happen
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if event.get("type") == "result":
+                    terminal_subtype = str(event.get("subtype") or "")
+                _absorb(result, event)
+                if on_event:
+                    on_event(event)
+    except BaseException:
+        # We are no longer draining the child's pipe, so leaving it alive would
+        # block it forever on its next write. Reap it deliberately rather than
+        # relying on the collector to close the handle for us, and tell the
+        # tracer the pid is gone — it recorded the spawn and would otherwise
+        # believe this process is still running.
+        process.kill()
+        process.wait()
+        if on_exit:
+            on_exit(process.pid)
+        raise
 
     stderr = process.stderr.read() if process.stderr else ""
     result.returncode = process.wait()
@@ -425,6 +440,11 @@ def run(request: AgentRequest, on_event: Optional[Callable[[dict], None]] = None
         on_exit(process.pid)
     if result.returncode != 0 and not result.text:
         raise RuntimeError(f"claude exited {result.returncode}: {stderr.strip()[-800:]}")
+    if terminal_subtype and terminal_subtype != "success":
+        raise RuntimeError(
+            f"claude ended the turn with subtype {terminal_subtype!r} instead of "
+            f"'success' and produced no report — this is not a JSON formatting "
+            f"problem, so re-prompting will not fix it")
     return result
 
 
@@ -460,6 +480,8 @@ def _absorb(result: AgentResult, event: dict) -> None:
         text = event.get("result")
         if isinstance(text, str) and text:
             result.text = text
+        # `+=`, not `=`: reads as accrual, though the stream carries exactly one
+        # terminal `result` event per turn, so this only ever adds once.
         cost = float(event.get("total_cost_usd") or 0.0)
         result.cost += cost
         # Claude Code prices the turn as one number, so the per-component cost
