@@ -86,6 +86,23 @@ def test_a_foreign_provider_is_rejected():
         agent_cc.resolve_model("openai/gpt-5.6-terra")
 
 
+def test_a_missing_model_id_is_rejected():
+    with pytest.raises(ValueError, match="no model-id after the slash"):
+        agent_cc.resolve_model("anthropic/")
+
+
+def test_a_whitespace_only_model_id_is_rejected():
+    # Would otherwise reach the CLI as --model " " and fail with no mention
+    # of which agent's config was wrong.
+    with pytest.raises(ValueError, match="no model-id after the slash"):
+        agent_cc.resolve_model("anthropic/ ")
+
+
+def test_a_padded_model_id_is_stripped():
+    assert agent_cc.resolve_model("anthropic/ claude-opus-5 ") == (
+        "anthropic", "claude-opus-5")
+
+
 def test_context_window_is_known_for_a_listed_model():
     assert agent_cc.context_window("anthropic", "claude-opus-5") == 1_000_000
 

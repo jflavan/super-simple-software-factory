@@ -114,10 +114,13 @@ def resolve_model(pattern: str) -> tuple[str, str]:
         raise ValueError(f"model {pattern!r} must be written provider/model-id, "
                          f"e.g. anthropic/claude-opus-5")
     provider, model_id = pattern.split("/", 1)
+    if not model_id.strip():
+        raise ValueError(f"model {pattern!r} has no model-id after the slash — "
+                         f"write it as provider/model-id, e.g. anthropic/claude-opus-5")
     if provider not in PROVIDERS:
         raise ValueError(f"provider {provider!r} is not served by coding_agent "
                          f"claude_code — expected one of {', '.join(sorted(PROVIDERS))}")
-    return provider, model_id
+    return provider, model_id.strip()
 
 
 def context_window(provider: str, model_id: str) -> int:
