@@ -53,6 +53,15 @@ def test_apply_thinking_rejects_an_unknown_level():
         agent_cc.apply_thinking({}, "ludicrous")
 
 
+def test_apply_thinking_leaves_the_env_alone_when_the_level_is_bad():
+    env = {"MAX_THINKING_TOKENS": "31337"}
+
+    with pytest.raises(ValueError, match="unknown thinking level"):
+        agent_cc.apply_thinking(env, "ludicrous")
+
+    assert env["MAX_THINKING_TOKENS"] == "31337", "a failed call must not mutate"
+
+
 def test_tools_map_to_claude_code_names():
     assert agent_cc.allowed_tools(["read", "write", "grep"]) == ["Read", "Write", "Grep"]
 
@@ -239,3 +248,122 @@ def test_an_empty_tool_list_is_not_the_same_as_no_tools_key():
 
     assert "--allowedTools" not in every
     assert "--allowedTools" in none_at_all
+
+
+class FakeProcess:
+    """Stands in for a Popen handle: an iterable stdout and a return code."""
+
+    def __init__(self, lines, returncode=0):
+        self.stdout = iter(lines)
+        self.stderr = _FakeStderr()
+        self.pid = 4242
+        self._returncode = returncode
+
+    def wait(self):
+        return self._returncode
+
+
+class _FakeStderr:
+    @staticmethod
+    def read():
+        return ""
+
+
+def _stream(*events):
+    return [json.dumps(event) + "\n" for event in events]
+
+
+def test_run_collects_text_cost_and_tokens(tmp_path, monkeypatch):
+    events = _stream(
+        {"type": "system", "subtype": "init", "session_id": "x"},
+        {"type": "assistant", "message": {"role": "assistant", "content": [
+            {"type": "text", "text": "working"}],
+            "usage": {"input_tokens": 100, "output_tokens": 20}}},
+        {"type": "result", "subtype": "success", "result": '{"status": "success"}',
+         "total_cost_usd": 0.0123, "usage": {"input_tokens": 100, "output_tokens": 20}},
+    )
+    monkeypatch.setattr(agent_cc, "_popen", lambda *a, **k: FakeProcess(events))
+
+    result = agent_cc.run(_request(session_dir=str(tmp_path),
+                                   raw_output_path=str(tmp_path / "raw.jsonl")))
+
+    assert result.text == '{"status": "success"}'
+    assert result.cost == pytest.approx(0.0123)
+    assert result.tokens == 120
+    assert result.returncode == 0
+
+
+def test_run_writes_the_raw_stream_to_disk(tmp_path, monkeypatch):
+    events = _stream({"type": "result", "subtype": "success", "result": "done",
+                      "total_cost_usd": 0.0, "usage": {}})
+    monkeypatch.setattr(agent_cc, "_popen", lambda *a, **k: FakeProcess(events))
+    raw = tmp_path / "raw.jsonl"
+
+    agent_cc.run(_request(session_dir=str(tmp_path), raw_output_path=str(raw)))
+
+    assert raw.exists()
+    assert "result" in raw.read_text()
+
+
+def test_run_forwards_events_to_the_callback(tmp_path, monkeypatch):
+    events = _stream(
+        {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": "t", "name": "Read", "input": {"file_path": "a.cs"}}]}},
+        {"type": "result", "subtype": "success", "result": "ok",
+         "total_cost_usd": 0.0, "usage": {}},
+    )
+    monkeypatch.setattr(agent_cc, "_popen", lambda *a, **k: FakeProcess(events))
+    seen = []
+
+    agent_cc.run(_request(session_dir=str(tmp_path),
+                          raw_output_path=str(tmp_path / "raw.jsonl")),
+                 on_event=seen.append)
+
+    assert [event["type"] for event in seen] == ["assistant", "result"]
+
+
+def test_run_reports_spawn_and_exit(tmp_path, monkeypatch):
+    events = _stream({"type": "result", "subtype": "success", "result": "ok",
+                      "total_cost_usd": 0.0, "usage": {}})
+    monkeypatch.setattr(agent_cc, "_popen", lambda *a, **k: FakeProcess(events))
+    spawned, exited = [], []
+
+    agent_cc.run(_request(session_dir=str(tmp_path),
+                          raw_output_path=str(tmp_path / "raw.jsonl")),
+                 on_spawn=spawned.append, on_exit=exited.append)
+
+    assert spawned == [4242]
+    assert exited == [4242]
+
+
+def test_run_raises_when_the_agent_fails_with_no_output(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent_cc, "_popen", lambda *a, **k: FakeProcess([], returncode=1))
+
+    with pytest.raises(RuntimeError, match="claude exited 1"):
+        agent_cc.run(_request(session_dir=str(tmp_path),
+                              raw_output_path=str(tmp_path / "raw.jsonl")))
+
+
+def test_run_fills_the_usage_breakdown(tmp_path, monkeypatch):
+    # agents.execute reports the PHASE total from result.usage, not from
+    # result.tokens. An empty breakdown would log 0 tokens for the phase while
+    # the run banner showed the right number — two numbers disagreeing in the
+    # same trace.
+    events = _stream(
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": "hi"}],
+         "usage": {"input_tokens": 100, "output_tokens": 20,
+                   "cache_read_input_tokens": 7, "cache_creation_input_tokens": 3}}},
+        {"type": "result", "subtype": "success", "result": "done",
+         "total_cost_usd": 0.5, "usage": {}},
+    )
+    monkeypatch.setattr(agent_cc, "_popen", lambda *a, **k: FakeProcess(events))
+
+    result = agent_cc.run(_request(session_dir=str(tmp_path),
+                                   raw_output_path=str(tmp_path / "raw.jsonl")))
+
+    assert result.usage.input_tokens == 100
+    assert result.usage.output_tokens == 20
+    assert result.usage.cache_read_tokens == 7
+    assert result.usage.cache_write_tokens == 3
+    assert result.usage.total_tokens == 120
+    assert result.usage.total_cost == pytest.approx(0.5)

@@ -16,12 +16,14 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import time
 import uuid
 from pathlib import Path
+from typing import Callable, Optional
 
-from .data_types import AgentRequest
-from .utils import now_iso, resolve_argv
+from .data_types import AgentRequest, AgentResult
+from .utils import now_iso, operator_env, resolve_argv
 
 THINKING_TOKENS = {
     "off": 0,
@@ -53,11 +55,17 @@ def apply_thinking(env: dict[str, str], level: str) -> dict[str, str]:
     A dict of things to SET cannot express "off": the child environment starts
     as a copy of the operator's, so leaving MAX_THINKING_TOKENS alone lets an
     inherited value through and an agent configured `off` thinks anyway. The
-    variable is therefore always removed first, then set only when the level
-    asks for a budget.
+    variable is therefore removed first, then set only when the level asks for
+    a budget — and the level is validated before anything is touched, so a bad
+    level leaves the environment exactly as it found it.
     """
+    budget = THINKING_TOKENS.get(level)
+    if budget is None:
+        raise ValueError(f"unknown thinking level {level!r} — expected one of "
+                         f"{', '.join(THINKING_TOKENS)}")
     env.pop("MAX_THINKING_TOKENS", None)
-    env.update(thinking_env(level))
+    if budget:
+        env["MAX_THINKING_TOKENS"] = str(budget)
     return env
 
 
@@ -332,3 +340,132 @@ class CcToolCallTracker:
         if opened.get("clock"):
             record["duration_ms"] = int((time.monotonic() - opened["clock"]) * 1000)
         return record
+
+
+def _popen(cmd: list[str], env: dict[str, str], cwd: str):
+    """Launch the agent. A seam: tests replace this to exercise the stream logic.
+
+    stdin is DEVNULL, deliberately — the same hazard agent_pi documents. The
+    prompt travels in argv, so the child never needs stdin, but inheriting the
+    parent's means a non-TTY the child may block on forever. That failure is
+    silent and total: no events, no bytes, an empty raw_output.jsonl.
+    """
+    return subprocess.Popen(cmd, stdin=subprocess.DEVNULL,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            text=True, bufsize=1, cwd=cwd, env=env)
+
+
+def validate_agent(agent) -> list[str]:
+    """Config problems this backend can detect before anything spawns."""
+    problems = []
+    if agent.harness_engineering:
+        problems.append(
+            f"agent {agent.name!r}: harness_engineering is a pi extension mechanism "
+            f"with no Claude Code equivalent ({', '.join(agent.harness_engineering)}) "
+            f"— remove it, or run this agent on coding_agent: pi")
+    # An agent allowed nothing cannot act. config.md already says an empty list
+    # "is not 'all tools' — it is a tool-less agent, and it will stall", so say
+    # so at validation rather than spawning something that cannot work. Omitting
+    # the key entirely is how you ask for every tool.
+    if agent.tools is not None and not agent.tools:
+        problems.append(
+            f"agent {agent.name!r}: `tools: []` allows nothing, so this agent "
+            f"cannot act — name the tools it needs, or omit `tools` for all of them")
+    try:
+        allowed_tools(agent.tools)
+    except ValueError as error:
+        problems.append(f"agent {agent.name!r}: {error}")
+    return problems
+
+
+def run(request: AgentRequest, on_event: Optional[Callable[[dict], None]] = None,
+        on_spawn: Optional[Callable[[int], None]] = None,
+        on_exit: Optional[Callable[[int], None]] = None) -> AgentResult:
+    """Run one non-interactive Claude Code turn.
+
+    Same contract as agent_pi.run: tail the JSONL stream, forward every event
+    as it arrives, and return the turn's text, usage and cost.
+    """
+    provider, model_id = resolve_model(request.model)
+    session_value, resume = session_uuid(request.session_dir, request.session_id)
+    cmd = build_command(request, session_value, resume)
+
+    # apply_thinking, not env.update(thinking_env(...)): the child env starts as
+    # a copy of the operator's, so an inherited MAX_THINKING_TOKENS has to be
+    # removed for `off` to mean off.
+    env = apply_thinking(operator_env(), request.thinking)
+
+    raw_path = Path(request.raw_output_path)
+    raw_path.parent.mkdir(parents=True, exist_ok=True)
+
+    result = AgentResult(session_id=request.session_id,
+                         context_window=context_window(provider, model_id))
+    process = _popen(cmd, env, request.cwd)
+    if on_spawn:
+        on_spawn(process.pid)
+
+    with raw_path.open("a") as raw:
+        for line in process.stdout:
+            raw.write(line)
+            raw.flush()                      # events land on disk as they happen
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            _absorb(result, event)
+            if on_event:
+                on_event(event)
+
+    stderr = process.stderr.read() if process.stderr else ""
+    result.returncode = process.wait()
+    if on_exit:
+        on_exit(process.pid)
+    if result.returncode != 0 and not result.text:
+        raise RuntimeError(f"claude exited {result.returncode}: {stderr.strip()[-800:]}")
+    return result
+
+
+def _absorb(result: AgentResult, event: dict) -> None:
+    """Fold one stream event into the running result.
+
+    Usage accrues per assistant turn; the terminal `result` event carries the
+    authoritative cost and the final text. Occupancy is read off the last
+    assistant turn, matching agent_pi's rule.
+
+    UsageBreakdown.add_turn is NOT used here: it parses pi's usage shape
+    (`input`, `output`, a nested `cost` dict). Claude Code sends `input_tokens`
+    / `output_tokens` and reports cost only once, on the result event, so
+    add_turn would fold in silent zeros — and agents.execute reports the
+    phase's tokens from this breakdown, not from `tokens`.
+    """
+    etype = event.get("type")
+    if etype == "assistant":
+        usage = (event.get("message") or {}).get("usage") or {}
+        inputs = int(usage.get("input_tokens") or 0)
+        outputs = int(usage.get("output_tokens") or 0)
+        turn = inputs + outputs
+        if turn:
+            result.tokens += turn
+            result.context_tokens = turn
+            result.usage.input_tokens += inputs
+            result.usage.output_tokens += outputs
+            result.usage.cache_read_tokens += int(usage.get("cache_read_input_tokens") or 0)
+            result.usage.cache_write_tokens += int(
+                usage.get("cache_creation_input_tokens") or 0)
+            result.usage.total_tokens += turn
+    elif etype == "result":
+        text = event.get("result")
+        if isinstance(text, str) and text:
+            result.text = text
+        cost = float(event.get("total_cost_usd") or 0.0)
+        result.cost += cost
+        # Claude Code prices the turn as one number, so the per-component cost
+        # fields stay zero and only the total is claimed. Reporting a made-up
+        # split would be worse than reporting none.
+        result.usage.total_cost += cost
+
+
+ToolCallTracker = CcToolCallTracker
