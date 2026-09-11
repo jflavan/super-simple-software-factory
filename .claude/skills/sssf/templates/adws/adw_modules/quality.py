@@ -65,6 +65,7 @@ def _run(spec: QualityCheckSpec, run) -> QualityCheckResult:
     output_artifact = output_dir / "command.log"
     command = shlex.join(spec.argv)
     env = operator_env()             # the engineer's own shell environment
+    workdir = Path(run.repo_root) / spec.cwd
 
     run.console.note(f"quality {spec.name}: {command}")
     started_at = now_iso()
@@ -74,7 +75,7 @@ def _run(spec: QualityCheckSpec, run) -> QualityCheckResult:
     try:
         completed = subprocess.run(
             resolve_argv(spec.argv),
-            cwd=Path(run.repo_root) / spec.cwd,
+            cwd=workdir,
             env=env,
             capture_output=True,
             text=True,
@@ -95,7 +96,8 @@ def _run(spec: QualityCheckSpec, run) -> QualityCheckResult:
 
     duration = time.monotonic() - clock
     output_artifact.write_text(
-        f"$ {command}\nexit: {returncode}\nduration_seconds: {duration:.3f}\n"
+        f"$ {command}\ncwd: {workdir}\nexit: {returncode}\n"
+        f"duration_seconds: {duration:.3f}\n"
         f"\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}\n"
     )
     passed = returncode == 0
@@ -107,6 +109,8 @@ def _run(spec: QualityCheckSpec, run) -> QualityCheckResult:
         payload={
             "area": spec.area,
             "operation": spec.operation,
+            "cwd": spec.cwd,
+            "tier": spec.tier,
             "command": command,
             "returncode": returncode,
             "passed": passed,

@@ -154,6 +154,23 @@ class QualityCheckSpec(BaseModel):
     # bun not at all). A working directory is what all of them mean.
     cwd: str = "."
 
+    @field_validator("cwd")
+    @classmethod
+    def _cwd_stays_inside_the_repo(cls, value: str) -> str:
+        """A block runs somewhere INSIDE the repo, on every platform.
+
+        Absolute paths are rejected rather than normalized: `Path(repo_root) /
+        "/elsewhere"` silently DISCARDS the repo root and succeeds in the wrong
+        directory, which is worse than failing. Backslashes are folded because
+        this field is generated but also hand-editable, and a Windows operator
+        typing `apps\\web` would get a file that works locally and breaks in
+        POSIX CI.
+        """
+        text = value.replace("\\", "/")
+        if text.startswith("/") or (len(text) > 1 and text[1] == ":"):
+            raise ValueError(f"cwd must be relative to the repo root, got {value!r}")
+        return text
+
 
 class QualityCheckResult(BaseModel):
     """Captured evidence from one quality command."""
