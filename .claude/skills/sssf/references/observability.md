@@ -50,11 +50,13 @@ The gate event payload carries `attempt` too, so the `gate_results` table and th
 ```sql
 sessions (
   adw_id        TEXT PRIMARY KEY,
+  adw_name      TEXT,              -- script(s) run, e.g. "adw_plan + adw_build_test"
   request       TEXT,              -- the engineer's ask
   status        TEXT,              -- running | success | fail
   engineer      TEXT,
   started_at    TEXT, ended_at TEXT,
-  total_tokens  INTEGER, total_cost REAL
+  total_tokens  INTEGER, total_cost REAL,
+  archived      INTEGER DEFAULT 0  -- review triage set by the UI; never by a run
 );
 
 phases (

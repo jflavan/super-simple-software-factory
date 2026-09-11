@@ -26,6 +26,8 @@ adws/
 │   ├── agent_pi.py              Pi interface        ·   agent_cc.py  Claude Code interface
 │   ├── gates.py                 gate(envelope, run) -> GateReport — one check per item verified
 │   ├── changes.py               git diff vs a resolved base → ChangeSet → envelope for the documenter
+│   ├── permissions.py           enforces writes/protected_files after every agent call; rolls back breaches
+│   ├── quality.py               kind="code" phases — lint/test/build commands, no agent involved
 │   ├── prompts.py, session.py, tracer.py, console.py, git_helper.py, utils.py
 └── adw_data/
     ├── prompt_engineering/{agent}/{system.md,user.md}   tracked — edit prompts HERE, never in the skill

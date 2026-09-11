@@ -40,7 +40,7 @@ Gates are callables over the finished envelope — `gate(envelope, run) -> GateR
                                   gates=[gates.artifacts_exist, gates.diff_matches_claims]))
 ```
 
-On violations the harness does **not** restart the agent — it sends the violation list back into the **same session** as a correction (pi's `--session-id` creates-or-continues, so the context window is intact), bounded by that phase's `retries`. Every gate result is traced to the `gate_results` table. Exhausting the retries raises `GateFailure` and fails the phase.
+On violations the harness does **not** restart the agent — it sends the violation list back into the **same session** as a correction, bounded by that phase's `retries`. Both backends preserve the context window for this: pi's `--session-id` creates-or-continues, and `agent_cc.py` tracks its own session map and issues `--resume`. Every gate result is traced to the `gate_results` table. Exhausting the retries raises `GateFailure` and fails the phase.
 
 Gate claims, not guesses: declared artifacts exist and are non-empty, declared JSON parses, declared changes appear in the diff, declared test commands pass. Never hardcode counts — express quantity as a property of the declared list ("at least one artifact", "ALL declared paths valid"). Plan quality and code taste are not gateable; that is a reviewer agent or a human. New reusable gates go in `adw_modules/gates.py` (`update_modules.md`).
 
