@@ -22,6 +22,7 @@ from .facts import GenerationReport, ProfileFacts
 from .frameworks import get as get_framework
 
 BLOCKS_RELATIVE = "adws/adw_modules/quality_blocks.py"
+GATES_RELATIVE = "adws/adw_modules/profile_gates.py"
 
 
 class CompositeProfile:
@@ -123,20 +124,44 @@ class CompositeProfile:
                 f"other's evidence): {detail}")
         return blocks, unresolved
 
+    def _wirings(self, facts: ProfileFacts):
+        wirings = []
+        for framework in self.frameworks:
+            wirings += framework.gate_wiring(facts.of(framework.NAME))
+        return wirings
+
     def generate(self, facts: ProfileFacts, root, write: bool = True) -> GenerationReport:
         """Facts in, files out. `write=False` is the --doctor dry run.
 
-        The blocks module is rendered unconditionally - even on a dry run -
-        because `render_blocks_module` ast.parses what it produces. That is
-        the only thing standing between --doctor and a broken generated
-        module: rendering it is how a dry run proves the file WOULD import,
-        not just that facts were collected. Only the write to disk is gated.
+        KEEP this docstring and the comment below — Task 10 earned them and an
+        earlier draft of this task reverted both.
+
+        Write ORDER is load-bearing. `quality_blocks.py` is what `quality.py`
+        treats as "a profile generated this repo", and `gates.profile_gates()`
+        treats a missing `profile_gates.py` as "no profile, no stack gates" and
+        returns []. So if blocks landed first and the gates write then failed,
+        the repo would run its quality blocks green with every stack gate
+        silently unenforced — a factory that looks installed and checks less
+        than it says. Gates first means a half-written install has no blocks
+        either, which reads as "not installed" rather than "installed and
+        quietly weaker".
         """
         blocks, unresolved = self._collect(facts)
-        text = emit.render_blocks_module(
+        wirings = self._wirings(facts)
+        # Rendered unconditionally, written only when asked. render_* runs an
+        # ast.parse self-check, so a dry run PROVES the generated modules would
+        # import - which is the single most useful thing --doctor can do, and
+        # it could not do it while rendering lived inside `if write:`.
+        blocks_text = emit.render_blocks_module(
             facts, blocks, summary=[f"  {line}" for line in self.describe(facts)])
+        gates_text = emit.render_gates_module(facts, wirings)
         written: list[str] = []
         if write:
-            emit.write_file(root, BLOCKS_RELATIVE, text, written)
+            # Gates BEFORE blocks. See the docstring: blocks are the marker
+            # that a profile ran, gates are silently optional to the loader,
+            # so a failure between the two must leave the weaker-looking state,
+            # not the quieter one.
+            emit.write_file(root, GATES_RELATIVE, gates_text, written)
+            emit.write_file(root, BLOCKS_RELATIVE, blocks_text, written)
         return GenerationReport(profile=self.NAME, files=written, blocks=blocks,
-                                unresolved=unresolved)
+                                gates=[w.name for w in wirings], unresolved=unresolved)

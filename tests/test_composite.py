@@ -236,3 +236,82 @@ def test_a_case_only_block_name_clash_names_both_original_spellings(tmp_path,
 
 def test_gate_modules_lists_what_the_declared_frameworks_need_stamped(tmp_path):
     assert _profile(tmp_path).gate_modules() == ["gates_dotnet", "gates_sveltekit"]
+
+
+def test_generate_writes_the_gates_module(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    dotnet_svelte_repo(repo)
+    write(repo, "apps/web/.env.example", "PUBLIC_X=\n")
+    profile = _profile(tmp_path)
+
+    report = profile.generate(profile.detect(repo), repo)
+
+    generated = repo / "adws" / "adw_modules" / "profile_gates.py"
+    assert generated.is_file()
+    assert str(generated) in report.files
+    ast.parse(generated.read_text())
+
+
+def test_the_wired_gates_come_from_every_framework(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    dotnet_svelte_repo(repo)
+    write(repo, "apps/web/.env.example", "PUBLIC_X=\n")
+    # Must actually name a directive, not merely mention "csp" - see
+    # test_framework_sveltekit.py's marker tests for the exact contract.
+    write(repo, "apps/web/src/hooks.server.ts", "// csp: default-src 'self';\n")
+    profile = _profile(tmp_path)
+
+    report = profile.generate(profile.detect(repo), repo, write=False)
+
+    assert report.gates == ["ef_migration_triad", "env_example_sync", "sveltekit_csp"]
+
+
+def test_a_gate_whose_fact_is_absent_is_not_wired(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    dotnet_svelte_repo(repo)
+    profile = _profile(tmp_path)
+    report = profile.generate(profile.detect(repo), repo, write=False)
+    assert report.gates == ["ef_migration_triad"]
+
+
+def test_the_generated_wiring_builds_real_callables(tmp_path):
+    """Execute the generated module against the real gate factories."""
+    from adw_modules import gates_dotnet, gates_sveltekit
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    dotnet_svelte_repo(repo)
+    write(repo, "apps/web/.env.example", "PUBLIC_X=\n")
+    profile = _profile(tmp_path)
+    profile.generate(profile.detect(repo), repo)
+
+    text = (repo / "adws" / "adw_modules" / "profile_gates.py").read_text()
+    namespace = {"ef_migration_triad": gates_dotnet.ef_migration_triad,
+                 "env_example_sync": gates_sveltekit.env_example_sync,
+                 "sveltekit_csp": gates_sveltekit.sveltekit_csp}
+    body = "\n".join(line for line in text.splitlines()
+                     if not line.startswith("from ."))
+    exec(body, namespace)
+    assert all(callable(gate) for gate in namespace["PROFILE_GATES"])
+
+
+def test_a_dry_run_still_renders_the_gates_module_so_doctor_can_prove_it_imports(
+        tmp_path, monkeypatch):
+    """Mirrors the equivalent blocks-render test above. Both renders run an
+    ast.parse self-check, so a --doctor dry run has to trigger both, not just
+    whichever one an earlier draft happened to cover."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    dotnet_svelte_repo(repo)
+    profile = _profile(tmp_path)
+    calls = []
+    real = emit.render_gates_module
+    monkeypatch.setattr(emit, "render_gates_module",
+                        lambda *a, **k: calls.append(1) or real(*a, **k))
+
+    profile.generate(profile.detect(repo), repo, write=False)
+
+    assert calls == [1]

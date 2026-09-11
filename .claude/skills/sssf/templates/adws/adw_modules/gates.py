@@ -10,6 +10,7 @@ Gates check what is mechanically checkable; plan quality is a reviewer's job.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import subprocess
 from pathlib import Path
@@ -142,3 +143,34 @@ def doc_policy(envelope: EnvelopeBase, run) -> GateReport:
                 else f"{trigger} matches {rule.when}, which requires "
                      f"{required} — not in the change")
     return report
+
+
+def _import_profile_gates() -> list | None:
+    """The generated gate list, or None when no profile ever wrote one.
+
+    Mirrors `quality._import_generated_blocks`: existence is decided by
+    `find_spec`, BEFORE importing, so that every error raised *by* the
+    generated file stays fatal regardless of what it names. An earlier draft
+    of this function matched on `ModuleNotFoundError.name` instead, which
+    could not tell "profile_gates is absent" from "profile_gates imports
+    something else that is absent and happens to share its name" - and the
+    second case would silently fall back to an empty gate list. An empty gate
+    list is exactly as dangerous as quality.py's echo placeholders: it is a
+    definition of done that quietly stopped being enforced, only quieter,
+    because nothing here even admits it is fake.
+    """
+    if importlib.util.find_spec(f"{__package__}.profile_gates") is None:
+        return None
+    from .profile_gates import PROFILE_GATES
+    return list(PROFILE_GATES)
+
+
+def profile_gates() -> list:
+    """The stack gates a profile wired for this repo. Empty without one.
+
+    Spread into a phase's gate list: `gates=[gates.diff_matches_claims,
+    *gates.profile_gates()]`. An un-profiled repo gets an empty list and
+    behaves exactly as it did before profiles existed.
+    """
+    wired = _import_profile_gates()
+    return list(wired) if wired is not None else []

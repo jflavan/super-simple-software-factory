@@ -168,3 +168,25 @@ def test_the_config_accepts_a_doc_policy_block(tmp_path):
 
 def test_doc_policy_defaults_to_empty():
     assert SSSFConfig().doc_policy == []
+
+
+# ── profile_gates() loading a generated wiring, or none ─────────────────────
+
+def test_profile_gates_is_empty_when_nothing_was_generated(monkeypatch):
+    monkeypatch.setattr(gates, "_import_profile_gates", lambda: None)
+    assert gates.profile_gates() == []
+
+
+def test_profile_gates_returns_what_was_generated(monkeypatch):
+    sentinel = [lambda envelope, run: None]
+    monkeypatch.setattr(gates, "_import_profile_gates", lambda: sentinel)
+    assert gates.profile_gates() == sentinel
+
+
+def test_a_broken_generated_gate_module_is_not_swallowed(monkeypatch):
+    def raise_unrelated():
+        raise ModuleNotFoundError("No module named 'missing_thing'", name="missing_thing")
+
+    monkeypatch.setattr(gates, "_import_profile_gates", raise_unrelated)
+    with pytest.raises(ModuleNotFoundError):
+        gates.profile_gates()
