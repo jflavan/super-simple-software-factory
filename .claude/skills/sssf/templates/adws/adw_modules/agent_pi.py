@@ -46,6 +46,7 @@ def _pi_catalog() -> list[tuple[str, str, int]]:
     try:
         result = subprocess.run(
             [PI_PATH, "--list-models"], capture_output=True, text=True,
+            encoding="utf-8", errors="replace",
             timeout=30, env=operator_env(), check=False,
         )
     except (OSError, subprocess.TimeoutExpired):
@@ -113,7 +114,7 @@ def _context_tokens(usage: dict) -> int:
 
 def context_window(provider: str, model_id: str) -> int:
     """The model's context ceiling from pi's merged model catalog."""
-    registry = json.loads(Path(MODELS_JSON).read_text())
+    registry = json.loads(Path(MODELS_JSON).read_text(encoding="utf-8"))
     for model in registry.get("providers", {}).get(provider, {}).get("models", []):
         if model.get("id") == model_id:
             return int(model.get("contextWindow") or 0)
@@ -254,11 +255,12 @@ def run(request: AgentRequest, on_event: Optional[Callable[[dict], None]] = None
     # a run that sat idle at 0% CPU with an empty raw_output.jsonl.
     process = subprocess.Popen(cmd, stdin=subprocess.DEVNULL,
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                               text=True, bufsize=1, cwd=request.cwd,
+                               text=True, encoding="utf-8", errors="replace",
+                               bufsize=1, cwd=request.cwd,
                                env=operator_env())
     if on_spawn:
         on_spawn(process.pid)
-    with raw_path.open("a") as raw:
+    with raw_path.open("a", encoding="utf-8", newline="\n") as raw:
         assert process.stdout is not None
         for line in process.stdout:
             raw.write(line)

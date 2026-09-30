@@ -42,8 +42,31 @@ class PermissionBreach(RuntimeError):
     """An agent modified a path it was not permitted to modify."""
 
 
+# Two flags on every git call here, and the permission boundary depends on
+# both.
+#
+# `core.quotePath=false`: git's DEFAULT is to C-quote any byte over 0x7F, so a
+# file named `café.txt` comes back as the literal 12-character string
+# `"caf\303\251.txt"`. That string matches no glob an operator would write, so
+# `permitted()` never recognised it as protected and `enforce()` raised nothing
+# — an agent could modify a protected file simply by it having a non-ASCII
+# name. `_roll_back` could not undo it either: the quoted form is not a
+# pathspec git will match.
+#
+# `errors="surrogateescape"`: paths are bytes on Linux and need not be valid
+# UTF-8. "replace" would map an undecodable byte to U+FFFD, which also matches
+# no glob — the same silent bypass, reached a different way. surrogateescape is
+# identical to strict for valid UTF-8 and round-trips the rest losslessly, so
+# the comparison is always against the real path. It is the one place in this
+# codebase where a lossy decode would be a security hole rather than a cosmetic
+# one.
+GIT_PREFIX = ["-c", "core.quotePath=false"]
+
+
 def _git(args: list[str], cwd) -> str:
-    result = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
+    result = subprocess.run(["git", *GIT_PREFIX, *args], cwd=cwd,
+                            capture_output=True, text=True,
+                            encoding="utf-8", errors="surrogateescape")
     return result.stdout if result.returncode == 0 else ""
 
 
@@ -122,8 +145,9 @@ def _roll_back(run, path: str, before: dict[str, str], after: dict[str, str]) ->
             return "deleted"
         except OSError as error:
             return f"could not delete ({error})"
-    result = subprocess.run(["git", "checkout", "--", path],
-                            cwd=run.repo_root, capture_output=True, text=True)
+    result = subprocess.run(["git", *GIT_PREFIX, "checkout", "--", path],
+                            cwd=run.repo_root, capture_output=True, text=True,
+                            encoding="utf-8", errors="surrogateescape")
     return "rolled back" if result.returncode == 0 else "could not roll back"
 
 

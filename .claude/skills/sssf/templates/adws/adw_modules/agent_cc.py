@@ -145,7 +145,7 @@ def _read_session_map(path: Path) -> dict:
     if not path.exists():
         return {}
     try:
-        return json.loads(path.read_text())
+        return json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as error:
         raise RuntimeError(
             f"the Claude Code session map at {path} is not valid JSON ({error}) — "
@@ -178,7 +178,8 @@ def session_uuid(session_dir: str, sssf_session_id: str) -> tuple[str, bool]:
     mapping[sssf_session_id] = minted
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_name(path.name + ".tmp")
-    temp.write_text(json.dumps(mapping, indent=2))
+    temp.write_text(json.dumps(mapping, indent=2), encoding="utf-8",
+                    newline="\n")
     temp.replace(path)          # atomic on POSIX and Windows
     return minted, False
 
@@ -343,7 +344,8 @@ def _popen(cmd: list[str], env: dict[str, str], cwd: str):
     """
     return subprocess.Popen(cmd, stdin=subprocess.DEVNULL,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            text=True, bufsize=1, cwd=cwd, env=env)
+                            text=True, encoding="utf-8", errors="replace",
+                            bufsize=1, cwd=cwd, env=env)
 
 
 def validate_agent(agent) -> list[str]:
@@ -397,7 +399,7 @@ def run(request: AgentRequest, on_event: Optional[Callable[[dict], None]] = None
 
     terminal_subtype = ""
     try:
-        with raw_path.open("a") as raw:
+        with raw_path.open("a", encoding="utf-8", newline="\n") as raw:
             for line in process.stdout:
                 raw.write(line)
                 raw.flush()                      # events land on disk as they happen

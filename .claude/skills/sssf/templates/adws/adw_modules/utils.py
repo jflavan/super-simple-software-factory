@@ -103,7 +103,7 @@ def resolve_prompt(arg: str) -> str:
     try:
         p = Path(arg)
         if p.is_file():
-            return p.read_text()
+            return p.read_text(encoding="utf-8")
     except OSError:
         pass
     return arg
@@ -115,7 +115,8 @@ def engineer_name() -> str:
         return name
     try:
         out = subprocess.run(["git", "config", "user.name"],
-                             capture_output=True, text=True, timeout=5)
+                             capture_output=True, text=True, timeout=5,
+                             encoding="utf-8", errors="replace")
         if out.returncode == 0 and out.stdout.strip():
             return out.stdout.strip()
     except OSError:
@@ -232,7 +233,7 @@ def read_text(path, max_bytes: int | None = None) -> str:
     """
     try:
         if max_bytes is None:
-            return Path(path).read_text(errors="replace")
+            return Path(path).read_text(encoding="utf-8", errors="replace")
         with open(path, "rb") as file:
             return file.read(max_bytes).decode("utf-8", errors="replace")
     except (FileNotFoundError, NotADirectoryError):
